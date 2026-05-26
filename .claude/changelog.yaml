@@ -1,0 +1,65 @@
+# Changelog — structured session log
+# Each entry is one session/branch. Newest first.
+# /leroy reads entries[0]; /wrapup prepends to the top of entries[].
+# Each area bullet is prefixed with added:|changed:|fixed: to indicate change type.
+#
+# Version Numbering (SemVer):
+#   MAJOR (X.0.0) — incompatible / breaking API changes
+#   MINOR (0.X.0) — new features, backwards-compatible
+#   PATCH (0.0.X) — bug fixes, minor improvements
+#   MVP: use 0.x.x while iterating; bump to 1.0.0 when core features are stable
+#
+# IMPORTANT: Always quote commit hashes — e.g. ["abc1234"] not [abc1234].
+#
+# Schema reference: .claude/docs/changelog-schema.md
+
+template_entry:
+  version: "0.X.Y"
+  date: "YYYY-MM-DD"
+  branch: "feature/work-YYYYMMDD-HHMM-short-description"
+  focus: [feature, bugfix, refactor, infrastructure, documentation, stabilization]
+  summary: "One-line summary of the session's work"
+  beads: [bead-id-1, bead-id-2]
+  epic_progress: "epic-id XX% → YY%"
+  backend:
+    - "added|changed|fixed: <prose>"
+  frontend:
+    - "added|changed|fixed: <prose>"
+  infra:
+    - "added|changed|fixed: <prose>"
+  docs:
+    - "added|changed|fixed: <prose>"
+  tests: "N new/updated, M total passing"
+  standards:
+    - "fired: §X.Y (<rule>) — <how it applied>"
+    - "candidate: '<new rule text>' — promote after N occurrences"
+  commits: ["abc1234", "def5678"]
+
+# <!-- theme example -->
+# Below is a worked example entry for the fictitious "Asteroids: Wave Defense"
+# project — commented out for reference. Uncomment + adapt to seed your first
+# /wrapup, or just delete this block.
+#
+# - version: "0.3.0"
+#   date: "2026-05-25"
+#   branch: "feature/work-20260525-power-up-shop-rotation"
+#   focus: [feature, bugfix]
+#   summary: "Shop-economy daily-deal rotation lands (timezone-aware deterministic UTC-date hash; admin override slot reserved as asteroid-101). Replay-validator unblocked on 60+ min replays via int32→int64 timestamp widening; backfill required for ~12 historical replays flagged in the leaderboard backlog."
+#   beads: [asteroid-067, asteroid-042]
+#   epic_progress: "shop-economy 0% → 22%"
+#   backend:
+#     - "added: power-up-shop/rotation.py — DailyDealSelector with UTC-date deterministic hash + 7-day no-repeat memory (asteroid-067)"
+#     - "fixed: replay-validator/header.proto — timestamp field int32 → int64; reader auto-detects legacy headers via wire-format magic byte (asteroid-042)"
+#   frontend:
+#     - "added: renderer/shop_panel.tsx — daily-deal banner + 24h countdown timer; reads from /api/shop/daily-deal endpoint (asteroid-067)"
+#   infra:
+#     - "added: docs/level-designs/samples/replays/replay-2026-05-19-overflow.bin — fixture for the 60+ min timestamp bug regression test (asteroid-042)"
+#   docs:
+#     - "added: docs/shop-rotation-protocol.md — UTC-date hashing scheme + replay-safety guarantees (asteroid-067)"
+#   tests: "8 new (5 shop-rotation, 3 replay-header), 247 total passing"
+#   standards:
+#     - "fired: §3.2 (deterministic algorithms must be timezone-explicit) — applied to UTC-date hash derivation"
+#   commits: ["3f8a1c2", "9e02bb4", "11d4470"]
+# <!-- /theme example -->
+
+entries: []  # /wrapup prepends new session entries here

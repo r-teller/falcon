@@ -1,0 +1,54 @@
+# Handoff — session state log
+# Captures where work stands at end of each session.
+# /leroy reads entries[0]; /wrapup prepends a new entry.
+# IMPORTANT: Always quote commit hashes — e.g. ["abc1234"] not [abc1234].
+#
+# Schema reference: .claude/docs/handoff-schema.md
+
+template_entry:
+  date: "YYYY-MM-DD HH:MM UTC"
+  branch: "feature/work-YYYYMMDD-HHMM-short-description"
+  focus: [feature, bugfix, refactor, infrastructure, documentation, stabilization]
+  completed:
+    - "bead-id: what was accomplished"
+  discovered:
+    - "bead-id: new feature/bug filed this session"
+  in_progress:
+    - "bead-id: current state of partial work"
+  blockers:
+    - "bead-id: what's stuck and why"
+  next_steps:
+    - "bead-id: what to do next, in priority order"
+  epic_progress: "epic-id XX% → YY%"
+  commits: ["abc1234", "def5678"]
+  notes:
+    - "anything that doesn't fit the structured fields above"
+
+# <!-- theme example -->
+# Below is a worked example entry for the fictitious "Asteroids: Wave Defense"
+# project — commented out for reference. Uncomment + adapt to seed your first
+# /wrapup, or just delete this block.
+#
+# - date: "2026-05-25 18:00 UTC"
+#   branch: "feature/work-20260525-power-up-shop-rotation"
+#   focus: [feature, infrastructure]
+#   completed:
+#     - "asteroid-067: power-up shop daily-deal rotation (timezone-aware, deterministic per UTC date hash)"
+#     - "asteroid-042: replay-validator 60+ min timestamp-overflow fix (int32 → int64 in replay header)"
+#   discovered:
+#     - "asteroid-101: shop rotation needs admin-override knob for live events (P2 chore)"
+#   in_progress:
+#     - "asteroid-001.1: boss-wave variant schema draft (3/5 sections done; AC pending)"
+#   blockers:
+#     - "asteroid-051: co-op netcode spike blocked on auth-provider decision (asteroid-119)"
+#   next_steps:
+#     - "Open PR for this branch — power-up rotation + replay-validator fix"
+#     - "After PR merge: dispatch asteroid-001.1 (boss-wave schema) with --advisor=quartermaster"
+#     - "Refine asteroid-119 (auth provider) so asteroid-051 can unblock"
+#   epic_progress: "asteroid-001 35% → 35% (no movement); shop-economy epic 0% → 22%"
+#   commits: ["3f8a1c2", "9e02bb4", "11d4470"]
+#   notes:
+#     - "1 falcon dispatch stashed at .claude/tmp/falcon-reports-feature-work-20260525-power-up-shop-rotation.yaml"
+# <!-- /theme example -->
+
+entries: []  # /wrapup prepends new session entries here
