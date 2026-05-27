@@ -106,6 +106,14 @@ Per fdev-lbq.8 docs: `claude rm` is the correct primitive here (NOT `claude stop
 - **`--fork-session` anti-pattern (fdev-lbq.23):** documentation work already landed as part of fdev-lbq.9/.19/.22 — anti-pattern callouts present in PROTOCOL.md `### --bg dispatch mode`, REFERENCE.md `### Cron Dispatch-Mode Conventions` + `### claude agents CLI surface`, and COMMANDS.md `### --autopilot ✓`. Bead closed as already-implemented.
 - **Wake-phrase (`falcon poll`) (fdev-lbq.24):** REFERENCE.md default init_prompt template now recognizes the case-insensitive regex `^(falcon poll|/falcon-poll)\s*$` as a wake nudge — worker re-reads dispatch file, processes pending amendments, emits STATE: WAKE-PHRASE-PROCESSED, resumes prior context. Operators nudge idle/supervisor-stopped `--bg` workers via `claude agents` peek-and-reply without typing long instructions.
 
+### settings.local.json detection (fdev-lbq.26)
+
+Falcon's environment-detection logic (PROTOCOL.md Step 2 §"Mode selection + detection", step 3) previously consulted only `.claude/settings.json` (project) and `~/.claude/settings.json` (user) for the `disableAgentView` knob. It ignored the `.local.json` siblings, which are Claude Code's documented location for machine-specific overrides (gitignored conventionally). Operators setting `disableAgentView: true` in `.claude/settings.local.json` were surprised to see falcon try `--bg` anyway.
+
+This release extends the detection cascade to four files in this precedence order (highest-priority first): `<repo>/.claude/settings.local.json` → `<repo>/.claude/settings.json` → `~/.claude/settings.local.json` → `~/.claude/settings.json`. Matches Claude Code's own settings precedence (see https://code.claude.com/docs/en/settings). The downgrade message now names which specific file triggered the downgrade so operators can find and edit the right one.
+
+Updates in PROTOCOL.md Step 2 detection sequence + COMMANDS.md `--bg ✓` detection. No behavior change for operators who only use the non-`.local` files — those still cascade as before; `.local` siblings now take precedence when present.
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:

@@ -351,7 +351,14 @@ Why this is the default: the mapping between falcon's dispatch lifecycle and Cla
 1. **Version gate (cheapest, fails fast):** `claude --version` parsed; require >= 2.1.139. On failure: emit one-line note `--bg requires Claude Code >= 2.1.139 (detected: <version>). Auto-downgrading to --via-paste. Upgrade Claude Code OR pass --via-paste explicitly to suppress this message.` Proceed with `--via-paste` dispatch.
 
    > **Do NOT probe `claude --help` for `--bg`.** As of current Claude Code releases, `--bg` is NOT listed in `--help` output despite being supported on 2.1.139+. Agents that fall back to `claude --help | grep -- --bg` will get an empty result and falsely report `--bg` as unsupported. The version gate above is authoritative — do not second-guess it via `--help`. See PROTOCOL.md `### Mode selection + detection (v7.0.0)` for the full rationale.
-2. **`disableAgentView` settings check:** read `.claude/settings.json` first (project-level wins); fall back to `~/.claude/settings.json` (user-level). If `disableAgentView: true` in either: emit `agent-view disabled by <project|user> settings.json. Auto-downgrading to --via-paste.` Proceed with `--via-paste` dispatch.
+2. **`disableAgentView` settings check (v7.0.1 — four-file cascade per fdev-lbq.26):** walk the four candidate settings files in this precedence order, taking the first non-null value found:
+
+   1. `<repo>/.claude/settings.local.json` (project-level machine-local; gitignored conventionally)
+   2. `<repo>/.claude/settings.json` (project-level committed)
+   3. `~/.claude/settings.local.json` (user-level machine-local)
+   4. `~/.claude/settings.json` (user-level committed)
+
+   If `disableAgentView: true` is found at any level: emit `agent-view disabled by <project-local|project|user-local|user> settings (<file-path>). Auto-downgrading to --via-paste.` Proceed with `--via-paste` dispatch. The four-file cascade matches Claude Code's own settings precedence (see https://code.claude.com/docs/en/settings) — operators encoding machine-local overrides in `.local.json` get them honored.
 3. **Mode override:** if user explicitly passed `--via-paste` or `--paste`, skip the checks and use the explicit mode.
 4. **Success path:** emit one-line confirmation `Dispatch mode: --bg (agent-view v<version> detected)` so the user sees the default mode + the version that drove the choice.
 
