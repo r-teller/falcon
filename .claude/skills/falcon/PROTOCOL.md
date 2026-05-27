@@ -307,7 +307,7 @@ A new `phase_transitions[]` field on the dispatch file records each transition f
 
 The Phase Transition Handler (below) detects transitions on each steering invocation and re-arms crons at phase-appropriate cadence. See `### Phase Transition Handler (v7.1)` below this section.
 
-**Forecast-driven initial cadence (v7.0.1 spec; impl deferred to v7.1, fdev-lbq.25):** the default cadences (5m / 5m / 11m / 15m for auto-ack / auto-amend / watch / release-on-merge) are tuned for medium-size beads (~25-60 turns). For very short or very long beads, the cadences are mis-calibrated — short beads see noisy over-polling; long beads underutilize the cadence budget. The bead's Effort Forecast (per `.claude/docs/work-item-templates.md` §Effort Forecast contract, with Total turns + Confidence) can drive initial cadence bucketing at dispatch time. The proposed bucket table:
+**Forecast-driven initial cadence (v7.1.0 LIVE, fdev-lbq.28 implements fdev-lbq.25 spec):** at dispatch-time Step 2, steering parses the bead's Effort Forecast from the bead body (via `bd show --json <bead-id>` → description field; regex on the `- Total: ~N turns` and `- Confidence: <low|medium|high>` lines per the work-item-templates.md §Effort Forecast contract), maps Total turns to a bucket, applies the confidence modulator, and computes the per-cron initial cadence used in each subsequent CronCreate call. The bucket table:
 
 | Total Turns | Initial cadence (auto-ack / auto-amend / watch) |
 |---|---|
@@ -315,9 +315,35 @@ The Phase Transition Handler (below) detects transitions on each steering invoca
 | 16-50 (medium) | 4m / 7m / 11m (current default) |
 | > 50 (long) | 8m / 14m / 22m |
 
-Confidence modulator: `low` → shift one bucket faster (catch overruns); `high` → shift one bucket slower (reduce noise). Missing Effort Forecast → use medium bucket default (graceful degrade).
+Confidence modulator: `low` → shift one bucket faster (catch overruns); `high` → shift one bucket slower (reduce noise). Missing Effort Forecast → use medium bucket default (graceful degrade); steering emits one inline log line `no Effort Forecast found on bead <id> — using medium bucket default (4m/7m/11m)`.
 
-**v7.0.1 ships the SPEC and the bucket table; implementation deferred to v7.1.** Rationale: the in-prompt Step 0 adaptive-cadence guards (`fdev-lbq.2`/`fdev-lbq.3`) already reduce per-fire cost in quiescent windows, capturing most of the noise reduction without touching CronCreate semantics. Cadence-bucketing-at-dispatch-time requires parameterizing the CronCreate schedule string + reading Effort Forecast prose from bead bodies — both larger changes that benefit from the v7.0.x retro experience first. When v7.1 implements this, Step 2 of the dispatch protocol picks up an Effort-Forecast read + bucket lookup before the CronCreate calls.
+**Parser pseudocode (the implementation at Step 2):**
+
+```
+def compute_initial_cadence(bead_id):
+    body = bd_show_json(bead_id).description            # string
+    total_match = regex(r'-\s*Total:\s*~?(\d+)\s*turns', body)
+    conf_match  = regex(r'-\s*Confidence:\s*(low|medium|high)', body, IGNORECASE)
+    if not total_match:
+        log_inline(f"no Effort Forecast found on bead {bead_id} — using medium default (4m/7m/11m)")
+        return MEDIUM_BUCKET                            # (4, 7, 11)
+    total = int(total_match.group(1))
+    confidence = (conf_match.group(1).lower() if conf_match else "medium")
+    if total <= 15:    bucket_idx = SHORT
+    elif total <= 50:  bucket_idx = MEDIUM
+    else:              bucket_idx = LONG
+    if confidence == "low":  bucket_idx = max(SHORT, bucket_idx - 1)
+    elif confidence == "high": bucket_idx = min(LONG,  bucket_idx + 1)
+    return BUCKETS[bucket_idx]                          # (ack_m, amend_m, watch_m)
+```
+
+The computed `(ack_m, amend_m, watch_m)` tuple feeds into each CronCreate call's schedule string at Step 2: `*/<ack_m> * * * *` for the autoack cron, `*/<amend_m> * * * *` for autoamend, `*/<watch_m> * * * *` for watch. Release-on-merge cadence is a separate constant (15m default) — not in this bucket table.
+
+**Multi-bead dispatches**: if `bead_ids[]` has multiple entries, compute the per-bead cadence for each and pick the FASTEST cadence (smallest minute value) across the set per cron type. Rationale: a short-bucket bead in the set drives the cadence; longer-bucket beads are over-polled but the short bead's relevance window dominates the dispatch.
+
+**Cadence prose elsewhere in PROTOCOL.md is bucket-computed-at-dispatch-time, not hardcoded.** References to "default 10m watch" / "default 5m auto-ack" etc. in `### --watch mode`, `### --auto-ack mode`, etc. now reflect the MEDIUM bucket value as the documented default; actual cadence at a given dispatch depends on the bead's forecast.
+
+**v7.1.0 ships the impl** (fdev-lbq.28 closed). v7.0.1 shipped only the SPEC + bucket table because the in-prompt Step 0 adaptive-cadence guards (fdev-lbq.2/.3) already reduce per-fire cost in quiescent windows. The v7.1.0 impl extends that with dispatch-time cadence bucketing — short beads get tighter cadences (2m/4m/6m), long beads get relaxed (8m/14m/22m), missing-forecast falls back to medium default.
 
 ### Phase Transition Handler (v7.1 spec; impl deferred, fdev-lbq.27)
 

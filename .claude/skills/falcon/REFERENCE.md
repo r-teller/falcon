@@ -1634,9 +1634,11 @@ Falcon's v7.0.1 + v7.1 cron cadence model has TWO orthogonal adaptation mechanis
 
 1. **Per-fire Step 0 adaptive cadence guards (v7.0.1, fdev-lbq.2 + fdev-lbq.3)**: each `--auto-ack` and `--auto-amend` cron template carries a Step 0 early-exit guard that probes the dispatch file's state-driving fields via a minimal yq query and exits silently when there's nothing to do. **Token cost** is what adapts (the cadence itself stays fixed at the CronCreate-assigned schedule). Implemented in v7.0.1.
 
-2. **Per-phase cadence re-arming via CronCreate (v7.1 spec, fdev-lbq.27)**: steering observes dispatch lifecycle phase (computed from existing fields per PROTOCOL.md `### Mode selection + detection` §"Dispatch lifecycle phases") and on each phase transition, performs CronDelete-then-CronCreate to RE-ARM each cron at the phase-appropriate cadence. **The cadence itself** is what adapts (Step 0 still fires per the same CronCreate-assigned schedule, just at a different schedule across phases). Spec landed in v7.0.1; implementation deferred to v7.1.
+2. **Per-phase cadence re-arming via CronCreate (v7.1 spec, fdev-lbq.27; impl deferred per fdev-lbq.29)**: steering observes dispatch lifecycle phase (computed from existing fields per PROTOCOL.md `### Mode selection + detection` §"Dispatch lifecycle phases") and on each phase transition, performs CronDelete-then-CronCreate to RE-ARM each cron at the phase-appropriate cadence. **The cadence itself** is what adapts (Step 0 still fires per the same CronCreate-assigned schedule, just at a different schedule across phases). Spec landed in v7.0.1; implementation pending in fdev-lbq.29.
 
-The two mechanisms compose: per-phase re-arm picks the schedule; per-fire Step 0 makes each fire cheap when state hasn't shifted. fdev-lbq.25 (forecast-driven initial cadence) supplies the bucket value that per-phase multipliers modulate. fdev-lbq.27 (this bead's parent design) ties phase × cron × bucket together via the multiplier table in PROTOCOL.md `### Phase Transition Handler (v7.1)`.
+3. **Forecast-driven initial cadence (v7.1.0 LIVE, fdev-lbq.28 implements fdev-lbq.25 spec)**: at dispatch-time Step 2, steering parses the bead's Effort Forecast Total turns + Confidence and selects a bucket (short/medium/long) for each cron's initial CronCreate cadence. See PROTOCOL.md `### Mode selection + detection` §"Forecast-driven initial cadence" for the bucket table and parser pseudocode.
+
+The three mechanisms compose: **forecast picks the initial bucket** (.28, live); **per-phase re-arm shifts the cadence as the dispatch progresses** (.27, pending impl); **Step 0 makes each fire cheap when state hasn't shifted** (.2/.3, live). When all three ship, autopilot crons should land on signal-density > 30% across the dispatch lifetime per the .6 telemetry validation.
 
 ### `claude agents` CLI surface (v7.0.1)
 
@@ -1696,7 +1698,7 @@ CronCreate call shape (steering side, at Step 2):
 
 ```
 CronCreate(
-  cron: "*/<N> * * * *",                       # N from --cron-cadence; default 10
+  cron: "{{ schedule_expression }}",            # v7.1.0 (fdev-lbq.28): N computed from bead Effort Forecast bucket at Step 2 (watch slot of compute_initial_cadence tuple); default = MEDIUM bucket value (11). Override via --cron-cadence Nm forces N regardless of bucket. Offset-staggered per fdev-lbq.5.
   prompt: <the template below, with literals substituted>,
   durable: false,                              # session-bound; not persisted across restarts
   recurring: true,
@@ -1875,7 +1877,7 @@ CronCreate call shape (steering side, at Step 2):
 
 ```
 CronCreate(
-  cron: "*/<N> * * * *",                       # N from --cron-cadence; default 5
+  cron: "{{ schedule_expression }}",            # v7.1.0 (fdev-lbq.28): N computed from bead Effort Forecast bucket at Step 2 (auto-ack slot of compute_initial_cadence tuple); default = MEDIUM bucket value (4). Override via --cron-cadence Nm forces N regardless of bucket. Offset-staggered per fdev-lbq.5.
   prompt: <the template below, with literals substituted>,
   durable: false,
   recurring: true,
@@ -2143,7 +2145,7 @@ CronCreate call shape (steering side, at Step 2):
 
 ```
 CronCreate(
-  cron: "*/<N> * * * *",                       # N from --cron-cadence; default 5 (same as --auto-ack)
+  cron: "{{ schedule_expression }}",            # v7.1.0 (fdev-lbq.28): N computed from bead Effort Forecast bucket at Step 2 (auto-amend slot of compute_initial_cadence tuple); default = MEDIUM bucket value (7). Override via --cron-cadence Nm forces N regardless of bucket. Offset-staggered per fdev-lbq.5.
   prompt: <the template below, with literals substituted>,
   durable: false,
   recurring: true,
@@ -2487,7 +2489,7 @@ CronCreate call shape (WORKER side, invoked by the worker session after pasting 
 
 ```
 CronCreate(
-  cron: "*/<N> * * * *",                       # N from the setup paste-block; default 3
+  cron: "{{ schedule_expression }}",            # v7.1.0 (fdev-lbq.28): worker-cron is --via-paste-only (no-op in --bg per PROTOCOL.md); cadence remains operator-supplied via the setup paste-block; default 3. Not bucket-computed because the worker cron's relevance is binary (amendments pending or not) rather than dispatch-shape-driven.
   prompt: <the template below, with literals substituted>,
   durable: false,                              # worker-session-bound; dies when worker session ends
   recurring: true,
@@ -2685,7 +2687,7 @@ CronCreate call shape (steering side, at Step 2):
 
 ```
 CronCreate(
-  cron: "*/<N> * * * *",                       # N from --cron-cadence; default 15
+  cron: "*/<N> * * * *",                       # N from --cron-cadence; default 15. Release-on-merge cron is NOT bucket-computed (cadence reflects PR-merge polling frequency, not bead shape).
   prompt: <the template below, with literals substituted>,
   durable: false,
   recurring: true,

@@ -2,6 +2,37 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.1.0 (2026-05-27)
+
+**Forecast-driven initial cron cadence — LIVE (fdev-lbq.28 implements fdev-lbq.25 spec).** Step 2 of the dispatch protocol now reads each bead's Effort Forecast (Total turns + Confidence) at dispatch time and computes the initial CronCreate cadence per the bucket table:
+
+| Total Turns | Initial cadence (auto-ack / auto-amend / watch) |
+|---|---|
+| ≤ 15 (short)  | 2m / 4m / 6m |
+| 16-50 (medium) | 4m / 7m / 11m (default) |
+| > 50 (long) | 8m / 14m / 22m |
+
+Confidence modulator shifts one bucket faster (`low`) or slower (`high`). Missing/malformed Effort Forecast → medium bucket default + inline log. Multi-bead dispatches use the FASTEST cadence across the bead set per cron type. `--cron-cadence Nm` overrides the bucket-computed value.
+
+**Implementation details:**
+
+- Parser regex on the bead body (from `bd show --json <bead-id>`): `r'-\s*Total:\s*~?(\d+)\s*turns'` for Total, `r'-\s*Confidence:\s*(low|medium|high)'` for Confidence
+- 5 cron templates in REFERENCE.md (`--watch`, `--auto-ack`, `--auto-amend`, `--worker-cron`, `--release-on-merge`) had their CronCreate schedule strings parameterized via `{{ schedule_expression }}` substitution; `--worker-cron` and `--release-on-merge` are NOT bucket-computed (cadence is operator-supplied / PR-merge-polling-driven respectively)
+- Offset-staggering convention from fdev-lbq.5 still applies — `offset = (cron_slug_hash mod N)` heuristic produces well-distributed offsets at any bucket cadence
+- Step 0 adaptive-cadence guards from fdev-lbq.2/.3 unchanged — they fire on the same dispatch-file fields regardless of cadence value
+
+**Composition with other v7.x cadence work:**
+
+The cron cadence model now has THREE mechanisms operating at different scales:
+
+1. **Per-fire Step 0 adaptive guards (v7.0.1)** — short-circuits when state hasn't shifted. Token cost is what adapts.
+2. **Forecast-driven initial cadence (v7.1.0, this release)** — picks the initial bucket. Sets the cadence at CronCreate time.
+3. **Per-phase cadence re-arming (v7.1 spec, fdev-lbq.27/.29 pending)** — shifts cadence as the dispatch progresses through phases. Re-arms via CronCreate on transition.
+
+When all three are live, autopilot crons should land on signal-density > 30% across the dispatch lifetime per the fdev-lbq.6/.30 telemetry validation.
+
+**SKILL.md version bumped:** 7.0.1 → 7.1.0 (MINOR — new feature, backwards-compatible; v7.0.x dispatches without Effort Forecast still work via the fallback path).
+
 ## 7.0.1 (2026-05-27)
 
 Bundled v7.0.x operational retro pass — multiple targeted fixes landed on the same release branch.
