@@ -1953,6 +1953,30 @@ sides. Every future cron template lives in this REFERENCE.md section and follows
 the same `falcon-<role>-<dispatch-id>` slug + sidecar-snapshot-file convention.
 ```
 
+#### Condensed CronCreate prompt (v7.1.2)
+
+The literal text steering passes to `CronCreate(prompt=...)` for the `--watch` cron — a thin pointer that Reads the canonical Step 1-4 spec above at fire time. ~250 tokens vs. ~3000 for the full template body. Substituted literals at CronCreate time: `{{ dispatch_id }}`, `{{ dispatch_file_path }}`, `{{ snapshot_file_path }}`, `{{ branch_name }}`. `--watch` has no Step 0 adaptive guard (it's report-only; no quiescent silence-pattern), so the entire execution path is pointer-style.
+
+```
+You are a falcon --watch cron firing against dispatch {{ dispatch_id }}.
+
+Mode: REPORT-ONLY. Self-cancel slug: falcon-watch-{{ dispatch_id }}.
+Dispatch file: {{ dispatch_file_path }}
+Snapshot file: {{ snapshot_file_path }}
+Branch: {{ branch_name }}
+
+Read REFERENCE.md `## Autopilot Cron Prompt Templates` → `### --watch cron
+prompt template (v6.8.0)` and follow Steps 1-4 verbatim against the
+captured dispatch state. Mode-conditional emission per `### Cron
+Dispatch-Mode Conventions (v7.0.1)` — the worker_dispatch_mode field on
+the dispatch file drives whether to emit STATE: line (--bg) or
+labeled-copy fence (--via-paste / --paste). Per-dispatch commit
+attribution (`Closes: <bead-id>` trailer) per the same section's
+v7.0.1 fdev-lbq.4 rationale. Telemetry-counter contract per
+`### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)` applies on
+every fire.
+```
+
 (End of `--watch` cron prompt template.)
 
 ### `--auto-ack` cron prompt template (v6.9.0)
@@ -2168,6 +2192,54 @@ crons run: `falcon-watch-<dispatch-id>` (10m cadence, report-only) and
 `falcon-autoack-<dispatch-id>` (5m cadence, write-bearing). They use independent
 sidecar snapshots. /falcon release-cron tears down both via the
 `falcon-(watch|autoack)-<dispatch-id>` prefix-match.
+```
+
+#### Condensed CronCreate prompt (v7.1.2)
+
+The literal text steering passes to `CronCreate(prompt=...)` for the `--auto-ack` cron — Step 0's adaptive-cadence early-exit guard is kept INLINE (~60-70% of fires short-circuit there per v7.0.1 fdev-lbq.2; pointer-style Step 0 would defeat the per-fire amortized win by replacing a system-prompt-cached predicate with a tool-result-loaded one). Steps 1-6 (and the advisor-extension below if `advisor` field is non-null) are pointer-style: the cron Reads this REFERENCE.md at fire time. ~400 tokens vs. ~3500 for the full template body + extension. Substituted literals at CronCreate time: `{{ dispatch_id }}`, `{{ dispatch_file_path }}`, `{{ snapshot_file_path }}`, `{{ repo_path }}`, `{{ branch_name }}`.
+
+```
+You are a falcon --auto-ack cron firing against dispatch {{ dispatch_id }}.
+
+Mode: AUTONOMOUS INTENT ACKNOWLEDGEMENT. May write intent_acknowledged_utc
+to the dispatch file when all gates pass. Self-cancel slug:
+falcon-autoack-{{ dispatch_id }}.
+Dispatch file: {{ dispatch_file_path }}
+Snapshot file: {{ snapshot_file_path }}
+Repo path: {{ repo_path }}
+Branch: {{ branch_name }}
+
+## Step 0 — Adaptive cadence early-exit guard (INLINE, v7.0.1 fdev-lbq.2)
+
+Run a minimal state probe via focused yq queries before full Step 1 capture:
+
+    session_status=$(yq '.session_status' {{ dispatch_file_path }})
+    intent_acked=$(yq '.intent_acknowledged_utc' {{ dispatch_file_path }})
+
+Decision tree:
+
+1. If `session_status == "complete"`: proceed to Step 6 self-cancel (no
+   Step 1 capture, no gate eval).
+2. If `intent_acked` is non-null AND `session_status != "complete"`: ack
+   already landed (by prior fire or by user); exit silently. Do NOT
+   write snapshot. Do NOT execute Step 1.
+3. If `intent_acked` is null AND `session_status != "complete"`: active
+   window. Proceed to Step 1 below.
+
+Telemetry: increment `cron_telemetry.autoack.fires` on entry; on
+Step 0 case 2 silent-exit, increment `cron_telemetry.autoack.silent`
+and exit. (Case 1 + case 3 paths increment `useful` at the action
+boundary downstream.)
+
+## Steps 1-6 — execute per canonical spec
+
+Read REFERENCE.md `## Autopilot Cron Prompt Templates` → `### --auto-ack
+cron prompt template (v6.9.0)` and follow Steps 1 through 6 verbatim.
+If the dispatch's `advisor` field is non-null, ALSO read `#### --auto-ack
+advisor-extension (v6.12.0)` for the Step 4b advisor-fork extension to
+the gate evaluation. Mode-conditional emission per `### Cron Dispatch-Mode
+Conventions (v7.0.1)`. Telemetry-counter contract per `### Cron Telemetry
+Instrumentation (v7.1.0, fdev-lbq.30)` applies on every fire.
 ```
 
 (End of `--auto-ack` cron prompt template.)
@@ -2503,6 +2575,62 @@ criteria. /falcon release-cron tears down all three via prefix-match. Cadences
 differ: watch defaults to 10m; auto-ack and auto-amend both default to 5m.
 ```
 
+#### Condensed CronCreate prompt (v7.1.2)
+
+The literal text steering passes to `CronCreate(prompt=...)` for the `--auto-amend` cron — Step 0's adaptive-cadence early-exit guard is kept INLINE (per v7.0.1 fdev-lbq.3; three quiescent windows where the cron has nothing to do, every fire would otherwise pay the full gap-eval cost). Steps 1-7 (and the advisor-extension below if `advisor` field is non-null) are pointer-style. ~450 tokens vs. ~4500 for the full template body + extension. Substituted literals at CronCreate time: `{{ dispatch_id }}`, `{{ dispatch_file_path }}`, `{{ snapshot_file_path }}`, `{{ repo_path }}`, `{{ branch_name }}`.
+
+```
+You are a falcon --auto-amend cron firing against dispatch {{ dispatch_id }}.
+
+Mode: AUTONOMOUS AMENDMENT ISSUANCE. May write entries to amendments[]
+on the dispatch file when SAFE_TO_AMEND whitelist matches AND budget not
+exhausted. Self-cancel slug: falcon-autoamend-{{ dispatch_id }}.
+Dispatch file: {{ dispatch_file_path }}
+Snapshot file: {{ snapshot_file_path }}
+Repo path: {{ repo_path }}
+Branch: {{ branch_name }}
+
+## Step 0 — Adaptive cadence early-exit guard (INLINE, v7.0.1 fdev-lbq.3)
+
+Run a minimal state probe via focused yq queries before full Step 1 capture:
+
+    session_status=$(yq '.session_status' {{ dispatch_file_path }})
+    impl_results_hash=$(yq '.implementation_results_hash' {{ dispatch_file_path }})
+    amend_budget=$(yq '.amendment_budget' {{ dispatch_file_path }})
+    auto_amend_count=$(yq '.auto_amendments_issued // 0' {{ dispatch_file_path }})
+
+Decision tree (three quiescent windows):
+
+1. If `session_status == "complete"`: proceed to Step 7 self-cancel
+   (no Step 1 capture).
+2. If `impl_results_hash` is null AND `session_status != "complete"`:
+   worker hasn't emitted COMPLETION yet; no validation gaps to find.
+   Exit silently. Skip Step 1.
+3. If `amend_budget` is non-null AND `auto_amend_count >= amend_budget`:
+   HALT already detected on a prior fire (Step 4 emission). No further
+   amendments to issue. Exit silently. Skip Step 1. (The FIRST detection
+   of HALT — when `auto_amend_count` first reaches the budget — flows
+   through Step 4 to emit the AMENDMENT BUDGET EXHAUSTED notification;
+   only subsequent fires hit this Step 0 case 3 guard.)
+4. If `impl_results_hash` non-null AND `session_status != "complete"`
+   AND budget not exhausted: active window. Proceed to Step 1 below.
+
+Telemetry: increment `cron_telemetry.autoamend.fires` on entry; on
+Step 0 case 2 or case 3 silent-exit, increment `cron_telemetry.autoamend.silent`
+and exit. (Case 1 + case 4 paths increment `useful` at the action
+boundary downstream.)
+
+## Steps 1-7 — execute per canonical spec
+
+Read REFERENCE.md `## Autopilot Cron Prompt Templates` → `### --auto-amend
+cron prompt template (v6.10.0)` and follow Steps 1 through 7 verbatim.
+If the dispatch's `advisor` field is non-null, ALSO read `#### --auto-amend
+advisor-extension (v6.12.0)` for the Step 5b advisor-fork extension to
+gap evaluation. Mode-conditional emission per `### Cron Dispatch-Mode
+Conventions (v7.0.1)`. Telemetry-counter contract per `### Cron Telemetry
+Instrumentation (v7.1.0, fdev-lbq.30)` applies on every fire.
+```
+
 (End of `--auto-amend` cron prompt template.)
 
 #### `--auto-amend` advisor-extension (v6.12.0)
@@ -2688,6 +2816,44 @@ The `durable: false` flag on this cron ensures it dies with the worker session.
 If the worker session exits before steering releases the lock, the cron is gone
 — amendments queued after worker death cannot be picked up by this cron and
 require re-dispatch (per the dead-worker constraint in Amendments Workflow).
+```
+
+#### Condensed CronCreate prompt (v7.1.2)
+
+The literal text the worker session passes to `CronCreate(prompt=...)` for the `--worker-cron` cron (worker-side, after pasting the setup block below). The defensive `worker_dispatch_mode == "bg"` self-cancel check is kept INLINE because it's a single-field probe that prevents bogus operation if the cron is somehow armed in `--bg` mode (no-op per PROTOCOL.md). Steps 1-5 are pointer-style. ~250 tokens vs. ~2500 for the full template body. Substituted literals at CronCreate time: `{{ dispatch_id }}`, `{{ dispatch_file_path }}`, `{{ snapshot_file_path }}`, `{{ repo_path }}`, `{{ branch_name }}`.
+
+```
+You are a falcon --worker-cron firing in the worker session for dispatch
+{{ dispatch_id }}.
+
+Mode: AUTONOMOUS AMENDMENT EXECUTION. Acts on amendments already in
+amendments[] on the dispatch file. Self-cancel slug:
+falcon-workercron-{{ dispatch_id }}.
+Dispatch file: {{ dispatch_file_path }}
+Snapshot file: {{ snapshot_file_path }}
+Repo path: {{ repo_path }}
+Branch: {{ branch_name }}
+
+## Defensive mode check (INLINE, v7.0.1)
+
+    worker_dispatch_mode=$(yq '.worker_dispatch_mode' {{ dispatch_file_path }})
+
+If `worker_dispatch_mode == "bg"`: this cron should never have been armed
+(--worker-cron is a no-op in --bg per PROTOCOL.md `### --bg dispatch mode`;
+the worker self-poll mechanism at v7.1.1 `## Worker Self-Poll Cron
+Templates` handles --bg amendment pickup natively). Self-cancel via
+Step 5 and exit. Increment `cron_telemetry.workercron.silent` and
+record the bogus-arm event in cron telemetry.
+
+## Steps 1-5 — execute per canonical spec
+
+Read REFERENCE.md `## Autopilot Cron Prompt Templates` → `### --worker-cron
+cron prompt template (v6.11.0)` and follow Steps 1 through 5 verbatim
+against `amendments[]` per the Amendments Workflow (PROTOCOL.md). Mode-
+conditional emission per `### Cron Dispatch-Mode Conventions (v7.0.1)`
+applies to `--via-paste` / `--paste` only (this cron is no-op in `--bg`
+per the defensive check above). Telemetry-counter contract per `### Cron
+Telemetry Instrumentation (v7.1.0, fdev-lbq.30)` applies on every fire.
 ```
 
 (End of `--worker-cron` cron prompt template.)
@@ -2884,6 +3050,30 @@ This decouples PR merge from worker completion: the worker can finish, push comm
 emit COMPLETION, and steering can stash the report — but the lock blocks other
 dispatches from claiming overlapping files until the human review + merge actually
 happens. Useful for paranoid lock-release on sensitive file scopes.
+```
+
+#### Condensed CronCreate prompt (v7.1.2)
+
+The literal text steering passes to `CronCreate(prompt=...)` for the `--release-on-merge` cron — a thin pointer to the canonical Steps 1-5 spec above. ~200 tokens vs. ~2200 for the full template body. `--release-on-merge` has no Step 0 adaptive guard (single-purpose poller with one external call and one state-transition write; no quiescent window to optimize). Substituted literals at CronCreate time: `{{ dispatch_id }}`, `{{ dispatch_file_path }}`, `{{ snapshot_file_path }}`, `{{ repo_path }}`, `{{ branch_name }}`.
+
+```
+You are a falcon --release-on-merge cron firing against dispatch
+{{ dispatch_id }}.
+
+Mode: PR-MERGE OBSERVATION + LOCK-RELEASE TRIGGER. Polls `gh pr view` for
+the dispatch's branch; on `state: MERGED`, sets session_status: complete
+on the dispatch file (the auto-release path in PROTOCOL.md Step 4 picks
+up from there). Self-cancel slug: falcon-mergewatch-{{ dispatch_id }}.
+Dispatch file: {{ dispatch_file_path }}
+Snapshot file: {{ snapshot_file_path }}
+Repo path: {{ repo_path }}
+Branch: {{ branch_name }}
+
+Read REFERENCE.md `## Autopilot Cron Prompt Templates` → `### --release-on-merge
+cron prompt template (v6.12.0)` and follow Steps 1 through 5 verbatim.
+Mode-conditional emission per `### Cron Dispatch-Mode Conventions
+(v7.0.1)`. Telemetry-counter contract per `### Cron Telemetry
+Instrumentation (v7.1.0, fdev-lbq.30)` applies on every fire.
 ```
 
 (End of `--release-on-merge` cron prompt template.)

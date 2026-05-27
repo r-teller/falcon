@@ -212,6 +212,8 @@ See https://code.claude.com/docs/en/agent-view "How background sessions are host
 
 **`--worker-cron` suppression in `--bg` mode (Q3 verdict):** when the dispatch mode is `--bg`, steering does NOT emit the worker-cron setup paste-block, and `--worker-cron` (whether explicit or via `--autopilot` expansion) is a SILENT NO-OP. The auto-ack-resume guard (PROTOCOL.md Worker Lifecycle Step 3) handles amendment pickup naturally because the worker re-reads the dispatch file on each active turn. The flag stays explicit for `--via-paste` / `--paste` users; no formal deprecation in v7.0.0. `--autopilot` macro behavior: in `--bg` mode, the macro still expands to `--auto-ack --auto-amend --worker-cron --watch`, but `--worker-cron` is suppressed at emission time.
 
+**Worker-side polling in `--bg` mode (v7.1.1+ — clarification, fdev-b2f):** users coming from `--worker-cron`-flag documentation may wonder what fills the gap if `--worker-cron` is a no-op in `--bg`. The answer is the v7.1.1 **worker self-poll** mechanism (`### Worker self-poll at pause points (v7.1.1)` above), which is a worker-side convention armed automatically at intent + DAR pause points — not a steering flag. The worker self-poll is `--bg`-mode-only and supersedes `--worker-cron` semantics in that mode; `--worker-cron` remains the worker-side polling mechanism for `--via-paste` / `--paste` modes.
+
 **Cron emission dispatch-mode split (v7.0.1):** all autopilot cron templates in REFERENCE.md branch their emission shape on the dispatch's `worker_dispatch_mode` field (set once at dispatch-time, read fresh on each fire). The two paths have fundamentally different interaction contracts; see REFERENCE.md `### Cron Dispatch-Mode Conventions (v7.0.1)` for the full rules. In summary:
 
 - **`--bg` path** — cron writes to the dispatch file (state-change contract) and emits a single inline `STATE:` line to steering's chat. No labeled-copy fences (operator monitors steering output directly; no paste-into-worker-tab step exists in `--bg`). Cron MUST NOT invoke `claude --resume <worker-session>` against a running `--bg` agent — Claude Code refuses with `Error: Session <uuid> is currently running as a background agent (bg). Use claude agents to find and attach to it, or add --fork-session to branch off a copy.` Cron MUST NOT invoke `claude --fork-session` either — forking creates a duplicate session that violates the single-worker-per-dispatch invariant (both sessions could write conflicting state to the dispatch file). The cron's file write is the contract; the worker self-polls via auto-ack-resume guard or `falcon poll` operator nudge.
@@ -295,7 +297,7 @@ When `--watch` is set, after Step 1c (lock-registry check) and Step 2 (dispatch 
 
 Wiring:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--watch-cron-prompt-template-v680) `## Autopilot Cron Prompt Templates ### --watch cron prompt template`. The dispatch ID, dispatch file path, and snapshot file path are substituted into the template at CronCreate time — there are no generic crons.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`REFERENCE.md`](./REFERENCE.md#--watch-cron-prompt-template-v680) `## Autopilot Cron Prompt Templates ### --watch cron prompt template (v6.8.0) #### Condensed CronCreate prompt (v7.1.2)` (~250-token pointer-style; the cron Reads the canonical Steps 1-4 spec from the same section at fire time per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, and branch name are substituted into the template at CronCreate time — there are no generic crons.
 2. `CronCreate` returns an ID; steering writes it to `watch_cron_id` in the dispatch file.
 3. Cron cadence: default 10 minutes; override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-watch-<dispatch-id>` — used by `/falcon status` and `/falcon release-cron` for prefix-match lookups via `CronList`.
@@ -447,7 +449,7 @@ When `--auto-ack` is set, after Step 1c (lock-registry check) and Step 2 (dispat
 
 This is the FIRST write-bearing autopilot cron (Phase 1's `--watch` was report-only). The wiring mirrors `--watch` but with stricter preconditions:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--auto-ack-cron-prompt-template-v690) `## Autopilot Cron Prompt Templates ### --auto-ack cron prompt template`. Dispatch ID, dispatch file path, snapshot file path, and repo path are substituted at CronCreate time.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`REFERENCE.md`](./REFERENCE.md#--auto-ack-cron-prompt-template-v690) `## Autopilot Cron Prompt Templates ### --auto-ack cron prompt template (v6.9.0) #### Condensed CronCreate prompt (v7.1.2)` (~400-token pointer-style with INLINE Step 0 adaptive guard; Steps 1-6 + advisor extension are pointer-style per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, repo path, and branch name are substituted at CronCreate time.
 2. `CronCreate` returns an ID; steering writes it to `autoack_cron_id` in the dispatch file.
 3. Cron cadence: default 5 minutes (shorter than `--watch`'s 10m because intent windows are brief and the cache-cost analysis from the v6.8.0 changelog applies here); override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-autoack-<dispatch-id>` — same prefix-match convention as `--watch`; `/falcon status` and `/falcon release-cron` discover both via slug-prefix.
@@ -469,7 +471,7 @@ When `--auto-amend` is set, after Step 1c (lock-registry check) and Step 2 (disp
 
 This is the THIRD entry in the cron prompt template registry (after `--watch` from Phase 1 and `--auto-ack` from Phase 2). Wiring follows the established pattern:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--auto-amend-cron-prompt-template-v6100) `## Autopilot Cron Prompt Templates ### --auto-amend cron prompt template`.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`REFERENCE.md`](./REFERENCE.md#--auto-amend-cron-prompt-template-v6100) `## Autopilot Cron Prompt Templates ### --auto-amend cron prompt template (v6.10.0) #### Condensed CronCreate prompt (v7.1.2)` (~450-token pointer-style with INLINE Step 0 adaptive guard; Steps 1-7 + advisor extension are pointer-style per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, repo path, and branch name are substituted at CronCreate time.
 2. `CronCreate` returns an ID; steering writes it to `amend_cron_id` in the dispatch file.
 3. Cron cadence: default 5 minutes (matches `--auto-ack`; amendment evaluation requires the worker's completion signal to be present, so the same fast-feedback window applies); override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-amend-<dispatch-id>` — same prefix-match teardown via `/falcon status` + `/falcon release-cron`.
@@ -537,7 +539,7 @@ When `--release-on-merge` is set, after Step 1c (lock-registry check) and Step 2
 
 Wiring:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--release-on-merge-cron-prompt-template-v6120) `## Autopilot Cron Prompt Templates ### --release-on-merge cron prompt template`.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`REFERENCE.md`](./REFERENCE.md#--release-on-merge-cron-prompt-template-v6120) `## Autopilot Cron Prompt Templates ### --release-on-merge cron prompt template (v6.12.0) #### Condensed CronCreate prompt (v7.1.2)` (~200-token pointer-style; no Step 0 — single-purpose poller; Steps 1-5 are pointer-style per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, repo path, and branch name are substituted at CronCreate time.
 2. `CronCreate` returns an ID; steering writes it to `merge_cron_id` in the dispatch file.
 3. Cron cadence: default 15 minutes (longer than the write-bearing crons because PR merges are low-frequency state changes; the cache-miss is amortized over the longer wait per the v6.7.0 cache-cost guidance). Override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-merge-<dispatch-id>` — same prefix-match teardown via `/falcon release-cron`.
