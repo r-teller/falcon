@@ -1519,6 +1519,29 @@ Snapshot-file convention: each cron-armed dispatch gets a sidecar `.claude/tmp/f
 
 This section is the registry. Phase 1 (v6.8.0) lands the `--watch` template; subsequent phases append additional templates here as they ship.
 
+### `claude agents` CLI surface (v7.0.1)
+
+Reference table of the Claude Code `claude agents` (and adjacent `claude <verb>`) commands that falcon cron templates + operators can use. Falcon does NOT wrap these — they're used directly per the upstream docs at https://code.claude.com/docs/en/agent-view. This subsection exists so cron-template authors and operators don't have to leave the falcon docs to look up the surface.
+
+| Command | What it does | Falcon use case |
+|---------|--------------|-----------------|
+| `claude agents` | Open agent-viewer TUI (interactive) | Operator monitor; not used by crons. |
+| `claude agents --cwd <path>` | Filter agent-viewer to sessions started under `<path>` (v2.1.141+) | Per-project session filtering. Operators with multi-project setups. |
+| `claude agents --json` | Print live sessions as JSON array and exit. Each entry: `pid`, `cwd`, `kind`, `startedAt`, `sessionId`, `name`, `status`. Combine with `--cwd <path>` to filter. | **Cron-driven state reads in `--bg` mode** — the canonical machine-readable surface. Used by `--watch` and `--auto-ack` crons for live session state. |
+| `claude attach <id>` | Attach to a session in the current terminal (interactive) | Operator-only; not scripted. |
+| `claude logs <id>` | Print the session's recent output | Operator-only; not used by crons. |
+| `claude stop <id>` (alias `claude kill`) | Stop a session's process. State preserved on disk; restart on attach/peek/reply. **NOT a terminal kill** — agent-viewer row stays. | Pause-but-resume; rarely used by falcon directly. |
+| `claude rm <id>` | Remove a session from agent-viewer. Transcript preserved on disk (reachable via `claude --resume`). Claude-created worktree removed if no uncommitted changes. **This is the terminal-kill primitive.** | Used by `/falcon release` post-completion to clear agent-viewer row (per fdev-lbq.18). |
+| `claude respawn <id>` | Restart a session (running or stopped) with conversation intact. Distinct from `/falcon respawn-fresh`. | Pick up an updated Claude Code binary mid-dispatch; falcon does not use this directly. |
+| `claude respawn --all` | Restart every running session | Operator escape hatch; not scripted. |
+| `claude --bg --name "<name>" "<bootstrap>"` | Spawn a detached background session with the given name + bootstrap prompt; prints short ID + name | Used by falcon Step 2 in `--bg` dispatch mode. |
+| `claude --version` | Print Claude Code version | Used by falcon Step 2 version gate (≥ 2.1.139 for `--bg`). |
+| `claude daemon status` | Print supervisor state, version, socket directory, worker count | Operator diagnostic. |
+| `claude --resume <session-name>` | Resume a previously-saved interactive session | **NEVER use against a running `--bg` session** — rejected with "session running as bg agent" error. See Cron Dispatch-Mode Conventions below. |
+| `claude --fork-session` | Branch off a copy of a session | **NEVER use for falcon dispatches** — creates duplicate session violating single-worker-per-dispatch invariant. See Cron Dispatch-Mode Conventions below. |
+
+**Anti-patterns explicitly documented above:** `claude --resume` and `claude --fork-session` are listed so cron-template authors and AI assistants seeing them suggested in error messages know NOT to reach for them. Both are valid in other Claude Code contexts (resume a saved interactive session; branch off for experimental exploration), but neither fits falcon's running-`--bg`-worker model.
+
 ### Cron Dispatch-Mode Conventions (v7.0.1)
 
 Every cron template below reads `worker_dispatch_mode` from the dispatch file at fire-time and branches on it. The two paths have fundamentally different interaction contracts. Each template's emission step and manual-ack guidance are mode-conditional per the rules below; the rules are written here once to avoid duplication across 5 templates.

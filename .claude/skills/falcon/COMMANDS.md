@@ -156,6 +156,10 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#falcon-release-cron
 
 **v7.0.0+ sub-command.** Spawn a FRESH `--bg` worker that continues an existing dispatch where the prior worker died (context exhausted, safety-tripped, stuck/looping, or operator-chosen replacement). The new worker picks up via a three-step recovery sequence that pushes any unpushed commits, closes beads with landed-but-bd-still-open work, and reconciles in-progress amendments — all before resuming normal lifecycle.
 
+**Compare to Claude Code's `claude respawn <id>` (v7.0.1, fdev-lbq.20):** these are different primitives. `claude respawn <id>` restarts the SAME session (running or stopped) with conversation intact — useful for picking up an updated Claude Code binary mid-session. `/falcon respawn-fresh <dispatch-id>` REPLACES the worker with a new session (new session ID, new agent-viewer row with `-r<N>` suffix), preserving the dispatch but forensically recording the prior in `worker_bg_prior_sessions[]`. The two are not interchangeable: use `claude respawn` for "same conversation, fresh process"; use `/falcon respawn-fresh` for "fresh conversation, same dispatch."
+
+**Worker termination primitives compared:** see PROTOCOL.md `### --bg dispatch mode` for the three-row table (`claude stop` / `claude rm` / `/falcon respawn-fresh`) clarifying when each is appropriate. Short version: `stop` pauses, `rm` terminally removes from agent-viewer, `respawn-fresh` replaces the worker. See also REFERENCE.md `### claude agents CLI surface (v7.0.1)`.
+
 **Behavior:**
 
 1. Read the dispatch file at `.claude/tmp/falcon-dispatch-<dispatch-id>.yaml`. Refuse if not found OR if `session_status: complete` (the dispatch is finished; respawn doesn't make sense). Refuse if `worker_dispatch_mode != "bg"` (respawn-fresh only applies to background-session dispatches).

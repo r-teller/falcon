@@ -61,6 +61,24 @@ Both write-bearing crons now have a **Step 0 — Adaptive cadence early-exit gua
 
 CronCreate-driven cadence-change (re-arming at a slower cadence on state transition) was considered but deferred to v7.1 — the in-prompt Step 0 guard is the minimum-risk fix that captures most of the noise reduction without touching CronCreate semantics. PROTOCOL.md `### --watch mode` documents the dual-guard pattern; `### --auto-ack mode` and `### --auto-amend mode` cross-reference the REFERENCE.md Step 0 templates.
 
+### Worker termination primitives + `claude agents` CLI surface documented (fdev-lbq.8 + fdev-lbq.20 + fdev-lbq.21 + fdev-lbq.22)
+
+Three primitives that affect a running `--bg` worker have different effects; operators were conflating them. This release adds a comparison table to PROTOCOL.md `### --bg dispatch mode` and an extended CLI-surface reference to REFERENCE.md:
+
+| Goal | Right command | Effect |
+|------|---------------|--------|
+| Pause; resume on next user interaction | `claude stop <id>` (alias `claude kill`) | Process stops; state preserved; agent-viewer row stays. NOT terminal. |
+| Remove from agent-viewer entirely | `claude rm <id>` | Row disappears; transcript preserved via `claude --resume`; Claude-created worktree removed if clean. Terminal kill. |
+| Replace worker forensically | `/falcon respawn-fresh <id>` | New session ID + `-r<N>` suffix; prior session recorded in `worker_bg_prior_sessions[]`. Dispatch continues. |
+
+Plus the orthogonal Claude Code `claude respawn <id>` (CLI) — restart same session with conversation intact (e.g. to pick up updated Claude Code binary). NOT the same as `/falcon respawn-fresh`. The two-primitive disambiguation is called out in COMMANDS.md `### /falcon respawn-fresh`.
+
+**Supervisor-stop semantics corrected:** PROTOCOL.md L187 prose updated to match upstream agent-view docs. Auto-stop fires only on FINISHED sessions sitting unattached for ~1hr. Working / Needs-input / attached sessions are NOT auto-stopped. Pinned sessions (Ctrl+T in agent view) are exempt. The supervisor does NOT autonomously revive stopped sessions at a new pid; restart happens on user interaction (attach/peek/reply). The retro observation that "supervisor revived at a new pid" was a misreading of the user-interaction-driven restart path.
+
+**`claude agents` CLI surface reference table** added to REFERENCE.md before the `Cron Dispatch-Mode Conventions` subsection — covers `claude agents`, `--cwd`, `--json`, `attach`, `logs`, `stop`/`kill`, `rm`, `respawn`, `--bg`, `--version`, `daemon status`, plus explicit anti-patterns (`--resume`, `--fork-session`) so cron-template authors don't have to leave the falcon docs to look up the surface.
+
+Cross-references added to https://code.claude.com/docs/en/agent-view as the upstream source of truth.
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:
