@@ -29,6 +29,18 @@ This release adds explicit `Cron Dispatch-Mode Conventions (v7.0.1)` to REFERENC
 
 No protocol-breaking changes for paste-mode operators. `--bg` operators see significantly less cron noise per fire (single line vs full fence) and no more `--resume` rejection errors in steering output.
 
+### Per-dispatch commit attribution: watch cron no longer emits N×N spurious STATUS UPDATEs on shared branch (fdev-lbq.4)
+
+Production retro observation: when N parallel dispatches share a branch (the v7.0.x parallel-dispatch model), the `--watch` cron's `commits_on_branch_since_open` metric was branch-global, not per-dispatch. When dispatch A pushed a commit, dispatch B's next watch fire saw `branch_total` ticked up and emitted a STATUS UPDATE — claiming a change that wasn't actually about dispatch B. With N dispatches, 1 commit produced N spurious updates (N×N worst case).
+
+Watch cron now computes per-dispatch attribution via the `Closes: <bead-id>` commit trailer (a Worker Lifecycle convention since pre-v7.0). Two metrics surface in the STATE: / STATUS UPDATE emission: `commits_attributed` (this dispatch's via trailer match) and `commits_unattributed` (everyone else's commits + amend/rebase that dropped the trailer). The attributed count drives state-change detection; the unattributed count fires a degraded "unattributed commit detected" notification ONLY when it GROWS since the prior fire (catches amend/rebase mistakes; ignores routine parallel-dispatch noise).
+
+- REFERENCE.md `--watch` cron Step 1 — rewrote the `git log` block to compute per-dispatch attribution + branch-wide unattributed counts
+- REFERENCE.md `--watch` cron Step 3 — STATE: and labeled-copy fence both now report `commits_attributed` + `commits_unattributed` separately; degraded notification fires on unattributed-grew
+- PROTOCOL.md `### --watch mode` — added "Per-dispatch commit attribution (v7.0.1, fdev-lbq.4)" subsection explaining the mechanism + the worker contract
+
+Worker-side contract reinforced: every commit MUST carry `Closes: <bead-id>` in the message. In single-dispatch mode this was best-practice; in parallel-dispatch mode it's now a correctness requirement. Workers already follow this convention per Worker Lifecycle Step 8; this release makes the watch-cron-side consumption explicit.
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:

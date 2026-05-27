@@ -1591,8 +1591,33 @@ Capture the following fields from the dispatch:
 For each bead in bead_ids[]:
 - Run `bd show --json <bead-id>` and capture status.
 
-Compute commit count on branch since dispatch open:
-- `git fetch origin && git log origin/<branch> --oneline --since="<dispatch created_utc>" | wc -l`
+Compute commit attribution (v7.0.1 — per-dispatch, not branch-wide):
+
+```
+# 1. Branch-wide count since dispatch open (raw, unfiltered)
+git fetch origin
+branch_total=$(git log origin/<branch> --oneline --since="<dispatch created_utc>" | wc -l)
+
+# 2. Per-dispatch attributed count via `Closes: <bead-id>` commit trailer
+#    (one expression per bead in bead_ids[]; sum the counts)
+dispatch_attributed=0
+for bead_id in <bead_ids[]>:
+  count=$(git log origin/<branch> --oneline --grep="Closes: <bead_id>" --since="<dispatch created_utc>" | wc -l)
+  dispatch_attributed=$((dispatch_attributed + count))
+
+# 3. Unattributed = anything on branch that we couldn't attribute to a known dispatch.
+#    This includes amend/rebase commits that dropped the trailer, legacy commits
+#    from before the convention was enforced, OR commits from OTHER dispatches
+#    running on the same branch in parallel (which is exactly the noise this
+#    metric is designed to suppress — they're attributed to a DIFFERENT dispatch).
+unattributed=$((branch_total - dispatch_attributed))
+# (Note: unattributed > 0 is NOT necessarily a problem in parallel-dispatch mode
+# — it means another dispatch on the same branch authored those commits.
+# Step 3 emits the degraded "unattributed commit detected" notification only
+# when unattributed_grew_since_prior_fire is true; not on every fire.)
+```
+
+**Rationale (v7.0.1, fdev-lbq.4):** before this change, watch cron used `branch_total` directly as the "commits on branch since open" metric. When N parallel dispatches shared a branch, dispatch A's commit caused N spurious STATUS UPDATEs (one per watching cron, each reporting the same commit as if it were attributable to that dispatch). The fix is per-dispatch attribution via the `Closes: <bead-id>` commit trailer (a convention that workers are already required to follow per PROTOCOL.md Worker Lifecycle Step 8). Watch cron now reports `dispatch_attributed_commits` (its own) and `unattributed_branch_commits` (everyone else's) separately. The dispatch-attributed count drives the STATE: emission; the unattributed count drives a degraded "unattributed commit detected" notification only when it changes (catches amend/rebase that dropped the trailer; ignores routine parallel-dispatch noise).
 
 ## Step 2 — Read prior snapshot
 
@@ -1614,10 +1639,17 @@ If any field changed: emit a formatted notification per `worker_dispatch_mode`:
 - **If `worker_dispatch_mode == "bg"`**: emit a single inline `STATE:` line
   (no fence), per "Cron Dispatch-Mode Conventions (v7.0.1)" above. Format:
 
-      STATE: WATCH-STATUS-UPDATE dispatch={{ dispatch_id }} session_status=<value> intent_acknowledged_utc=<value> implementation_results_hash=<presence> amendments=<count> beads=<dot-separated id:status> commits_since_open=<count>
+      STATE: WATCH-STATUS-UPDATE dispatch={{ dispatch_id }} session_status=<value> intent_acknowledged_utc=<value> implementation_results_hash=<presence> amendments=<count> beads=<dot-separated id:status> commits_attributed=<count> commits_unattributed=<count>
+
+  If `commits_unattributed` GREW since the prior fire (was N, now > N), append
+  one extra STATE: line flagging the degraded condition (catches amend/rebase
+  that dropped the `Closes:` trailer; ignores routine parallel-dispatch noise
+  where unattributed stays steady):
+
+      STATE: WATCH-UNATTRIBUTED-COMMIT-DETECTED dispatch={{ dispatch_id }} branch={{ branch_name }} unattributed_delta=<N>
 
   If the high-stakes DAR headline applies (see v6.12.2 paragraph below), prepend
-  it as a separate line above the STATE: line — keep both inline, no fences.
+  it as a separate line above the STATE: line(s) — keep all inline, no fences.
 
 - **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit a formatted
   labeled-copy block using the v6.5.3 convention with label `STATUS UPDATE`
@@ -1658,7 +1690,8 @@ instead.)
     auto_amendments_issued:        <prior> → <current> (budget: <amendment_budget>)
     beads:
       - <bead-id>: <prior bd status> → <current bd status>
-    commits on branch since open:  <prior count> → <current count>
+    commits attributed to dispatch: <prior count> → <current count>   (via `Closes: <bead-id>` trailer)
+    commits unattributed on branch: <prior count> → <current count>   (other dispatches OR amend/rebase dropped trailer)
 
     Dispatch file: {{ dispatch_file_path }}
     Snapshot:      {{ snapshot_file_path }}

@@ -258,6 +258,15 @@ The cron self-cancels on terminal state. Manual teardown is `/falcon release-cro
 
 **Minimum-viable mode when project gates are commented:** when `.claude/rules/falcon-autopilot.md` exists but every `# PROJECT —` section is commented (the post-`/falcon create-rules` default), `--watch` still works — it reads the dispatch file and bd state without consulting the autopilot rules at all (report-only does not need them). The rules file only becomes load-bearing under Phase 2+ flags (`--auto-ack`, `--auto-amend`, etc.) that gate writes against `SAFE_TO_ACK_INTENT` / `SAFE_TO_AMEND`. Phase 1's `--watch` does NOT refuse on a fully-commented rules file.
 
+**Per-dispatch commit attribution (v7.0.1, fdev-lbq.4):** when N dispatches share a branch (the v7.0.x parallel-dispatch model), the watch cron MUST distinguish commits authored by its own dispatch from commits authored by sibling dispatches. The attribution mechanism is the `Closes: <bead-id>` commit trailer that workers already include per Worker Lifecycle Step 8. The watch cron computes:
+
+- `commits_attributed` — `git log origin/<branch> --grep="Closes: <bead-id>"` summed across `bead_ids[]` (this dispatch's contribution)
+- `commits_unattributed` — `branch_total - commits_attributed` (sibling dispatches OR amend/rebase commits that dropped the trailer)
+
+The STATUS UPDATE / `STATE: WATCH-STATUS-UPDATE` emission reports both counts. A separate degraded notification (`STATE: WATCH-UNATTRIBUTED-COMMIT-DETECTED` or the labeled-copy variant in paste-mode) fires only when `commits_unattributed` GREW since the prior fire — this catches amend/rebase that dropped the trailer without spamming on routine parallel-dispatch noise (where unattributed stays steady across many fires).
+
+**Worker contract**: per Worker Lifecycle Step 8, every commit MUST include `Closes: <bead-id>` in the message. In single-dispatch mode this was best-practice; in parallel-dispatch mode it's a CORRECTNESS requirement — without the trailer, the watch cron cannot attribute the commit and falls through to the degraded notification on first observation. Amend/rebase that drops the trailer triggers a one-time degraded notification per fire; subsequent fires stay quiet.
+
 ### --auto-ack mode (autopilot intent acknowledgement, v6.9.0)
 
 When `--auto-ack` is set, after Step 1c (lock-registry check) and Step 2 (dispatch file write), steering arms a steering-side cron via `CronCreate` that evaluates the `SAFE_TO_ACK_INTENT` 4-gate predicate against the worker's intent paragraph on each fire. When all gates pass, the cron writes `intent_acknowledged_utc` to the dispatch file and emits the `proceed <dispatch-id>` block inline. When any gate fails, the cron defers silently with one inline note (per intent) explaining which gate failed and how to manually ack.
