@@ -79,6 +79,8 @@ ln -s falcon-upstream/.claude/commands/wrapup.md .claude/commands/wrapup.md
 
 Open Claude Code in your project. Type `/falcon` — falcon's commands should appear in autocomplete. If you installed Option 1, also try `/leroy` and `/wrapup`. Run `/falcon list-locks` (or any read-only command) to confirm the skill loaded.
 
+> **Heads-up:** `claude --help` does NOT list `--bg` among its flags as of current Claude Code releases, but the flag IS supported on Claude Code ≥ 2.1.139. Falcon detects support via `claude --version`, never `--help`. If an adopter or AI assistant reports "`--bg` is not a supported command" after probing `--help`, that's the false signal — verify with `claude --version` instead.
+
 ## Advisor cluster
 
 > **Included with Option 1** (Full distribution). The install commands below only apply if you used Option 2 (Falcon skill only) and now want to add the advisors.

@@ -34,6 +34,8 @@ Manual lock release for a single dispatch. The normal path is **automatic** (Ste
 - A worker session abandoned its dispatch without returning a report
 - You want to release a lock that the auto-release path declined (e.g., a held DAR was resolved externally)
 
+**v7.0.1 agent-viewer row cleanup (fdev-lbq.18):** in `--bg` mode, `/falcon release` (and the Step 4 auto-release path) follows a poll-then-rm ordering: write `session_status: complete`, clear the lock registry, poll the dispatch file up to ~30s for the worker's final report write, then invoke `claude rm <worker_bg_session_id>` to remove the agent-viewer row. The `claude rm` primitive (NOT `claude stop`) is required because `stop` only stops the process; the row stays. The timeout knob is tunable per-project in `.claude/rules/falcon-autopilot.md`. If `claude rm` reports an uncommitted worktree, the path is surfaced inline for operator cleanup. See PROTOCOL.md `## Step 4 — Stash for Wrapup + Auto-Release` for the wiring.
+
 ---
 
 ### `/falcon release-session <session-id>` ✓
@@ -133,6 +135,7 @@ Synthesize the branch-keyed stash (`.claude/tmp/falcon-reports-<sanitized-branch
 - budget-exhausted dispatches
 - release-on-merge dispatches
 - standards firings + discovered work + per-dispatch detail
+- **v7.1.0 (fdev-lbq.30):** cron telemetry per-cron `fires / silent / useful / signal_density` aggregated across all dispatches on the branch, plus a "dispatches without telemetry" legacy-accounting line. Target signal density: > 30% per cron.
 
 Emits a `RETRO SUMMARY` block (per the v6.5.3 labeled-copy convention) — no inline narrative. Output is consumed by `/wrapup` (v2.4+ reads it automatically when present in the steering transcript; older `/wrapup` requires the user to paste the block).
 
@@ -152,9 +155,39 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#falcon-release-cron
 
 ---
 
+### `/falcon transition <dispatch-id>` ✓ (v7.1.0, fdev-lbq.31)
+
+Manually invoke the Phase Transition Handler against a dispatch. Fills the known limitation of v7.1.0's per-phase cron cadence re-arming (per fdev-lbq.29): the Handler auto-fires only on Step 4 invocations (during `/falcon release` or auto-release). Operators running `/falcon status`, `/falcon list-locks`, or other read-only commands between Step-4-triggering events would otherwise miss intermediate phase transitions until the next dispatch action — leaving crons running at stale cadences.
+
+**Behavior:**
+
+1. Read the dispatch file at `.claude/tmp/falcon-dispatch-<dispatch-id>.yaml`. Refuse if not found.
+2. Refuse if `session_status: complete` — the dispatch is terminal; no further transitions to detect.
+3. Invoke the Phase Transition Handler (same code path Step 4 uses) — see PROTOCOL.md `### Phase Transition Handler (v7.1.0 LIVE)` §"Re-arm sequence on transition" for the full algorithm.
+4. Report the result inline:
+   - If no transition detected (`current_phase == previous_phase`): `No transition for dispatch <id>. Current phase: <phase>. Cron cadences unchanged.`
+   - If transition detected: `Transition for dispatch <id>: <previous_phase> → <current_phase>. Crons re-armed: <summary from cron_re_arms[]>.`
+5. Idempotent: invoking when no transition exists is a no-op (dispatch file untouched).
+
+**Use when:**
+
+- An operator has been polling a dispatch via `/falcon status` and notices the dispatch should have transitioned phases by now (e.g., worker emitted intent but auto-ack cron is still at its slow pre_intent cadence)
+- Diagnostics: confirm what phase falcon thinks a dispatch is in, without waiting for the next Step 4 invocation
+- Recovery: if a previous Step 4 invocation failed to complete (CronCreate-fail graceful-degrade path left some crons at OLD cadence), a manual `/falcon transition` retry lets steering reattempt the re-arm
+
+**Auto-invocation on `/falcon status` is intentionally OUT of scope** — coupling every read-only command to a potential dispatch-file write would surprise operators (status is documented as read-only) and creates new failure modes during partial writes. The manual invocation here is a deliberate trade-off: operators who want phase reconciliation must ask for it explicitly.
+
+For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-handler-v710-live-fdev-lbq29-implements-fdev-lbq27-spec) `### Phase Transition Handler (v7.1.0 LIVE)`.
+
+---
+
 ### `/falcon respawn-fresh <dispatch-id> [--reason=<reason>] [--force]` ✓
 
 **v7.0.0+ sub-command.** Spawn a FRESH `--bg` worker that continues an existing dispatch where the prior worker died (context exhausted, safety-tripped, stuck/looping, or operator-chosen replacement). The new worker picks up via a three-step recovery sequence that pushes any unpushed commits, closes beads with landed-but-bd-still-open work, and reconciles in-progress amendments — all before resuming normal lifecycle.
+
+**Compare to Claude Code's `claude respawn <id>` (v7.0.1, fdev-lbq.20):** these are different primitives. `claude respawn <id>` restarts the SAME session (running or stopped) with conversation intact — useful for picking up an updated Claude Code binary mid-session. `/falcon respawn-fresh <dispatch-id>` REPLACES the worker with a new session (new session ID, new agent-viewer row with `-r<N>` suffix), preserving the dispatch but forensically recording the prior in `worker_bg_prior_sessions[]`. The two are not interchangeable: use `claude respawn` for "same conversation, fresh process"; use `/falcon respawn-fresh` for "fresh conversation, same dispatch."
+
+**Worker termination primitives compared:** see PROTOCOL.md `### --bg dispatch mode` for the three-row table (`claude stop` / `claude rm` / `/falcon respawn-fresh`) clarifying when each is appropriate. Short version: `stop` pauses, `rm` terminally removes from agent-viewer, `respawn-fresh` replaces the worker. See also REFERENCE.md `### claude agents CLI surface (v7.0.1)`.
 
 **Behavior:**
 
@@ -343,7 +376,16 @@ Why this is the default: the mapping between falcon's dispatch lifecycle and Cla
 **Eager environment detection + auto-downgrade.** Before any dispatch action, steering runs:
 
 1. **Version gate (cheapest, fails fast):** `claude --version` parsed; require >= 2.1.139. On failure: emit one-line note `--bg requires Claude Code >= 2.1.139 (detected: <version>). Auto-downgrading to --via-paste. Upgrade Claude Code OR pass --via-paste explicitly to suppress this message.` Proceed with `--via-paste` dispatch.
-2. **`disableAgentView` settings check:** read `.claude/settings.json` first (project-level wins); fall back to `~/.claude/settings.json` (user-level). If `disableAgentView: true` in either: emit `agent-view disabled by <project|user> settings.json. Auto-downgrading to --via-paste.` Proceed with `--via-paste` dispatch.
+
+   > **Do NOT probe `claude --help` for `--bg`.** As of current Claude Code releases, `--bg` is NOT listed in `--help` output despite being supported on 2.1.139+. Agents that fall back to `claude --help | grep -- --bg` will get an empty result and falsely report `--bg` as unsupported. The version gate above is authoritative — do not second-guess it via `--help`. See PROTOCOL.md `### Mode selection + detection (v7.0.0)` for the full rationale.
+2. **`disableAgentView` settings check (v7.0.1 — four-file cascade per fdev-lbq.26):** walk the four candidate settings files in this precedence order, taking the first non-null value found:
+
+   1. `<repo>/.claude/settings.local.json` (project-level machine-local; gitignored conventionally)
+   2. `<repo>/.claude/settings.json` (project-level committed)
+   3. `~/.claude/settings.local.json` (user-level machine-local)
+   4. `~/.claude/settings.json` (user-level committed)
+
+   If `disableAgentView: true` is found at any level: emit `agent-view disabled by <project-local|project|user-local|user> settings (<file-path>). Auto-downgrading to --via-paste.` Proceed with `--via-paste` dispatch. The four-file cascade matches Claude Code's own settings precedence (see https://code.claude.com/docs/en/settings) — operators encoding machine-local overrides in `.local.json` get them honored.
 3. **Mode override:** if user explicitly passed `--via-paste` or `--paste`, skip the checks and use the explicit mode.
 4. **Success path:** emit one-line confirmation `Dispatch mode: --bg (agent-view v<version> detected)` so the user sees the default mode + the version that drove the choice.
 
@@ -519,6 +561,12 @@ Steering arms THREE crons in its own session (`falcon-watch-`, `falcon-autoack-`
 User pastes both into the worker tab in order. The worker session reads the dispatch file, arms its cron via `CronCreate`, and writes `worker_cron_id`. Four crons then run concurrently and coordinate via atomic writes to the dispatch file.
 
 Use when: "I'm going AFK and authorized everything safe to proceed without me."
+
+**v7.0.1 — cron emission dispatch-mode split.** All four autopilot crons (`--watch`, `--auto-ack`, `--auto-amend`, `--release-on-merge` when armed) branch their emission shape on `worker_dispatch_mode`. In `--bg` mode they emit single-line `STATE:` notifications (no fences) and rely on file writes for state-change contract. In `--via-paste` / `--paste` modes they emit the full labeled-copy fence (operator pastes into the worker tab). Crons MUST NOT invoke `claude --resume <worker-session>` or `claude --fork-session` against a running `--bg` worker — both are anti-patterns (the former is rejected by Claude Code; the latter creates a duplicate session that violates single-worker-per-dispatch). See REFERENCE.md `### Cron Dispatch-Mode Conventions (v7.0.1)` for the full rules and PROTOCOL.md `### --bg dispatch mode` for the wiring.
+
+**v7.1.0 — forecast-driven initial cadence is LIVE (fdev-lbq.28 implements fdev-lbq.25 spec).** Step 2 of the dispatch protocol now parses each bead's Effort Forecast Total turns + Confidence and computes the initial cron cadence per the bucket table in PROTOCOL.md `### Mode selection + detection` §"Forecast-driven initial cadence". Short beads (~10 turns) get tight cadences (2m/4m/6m); long beads (~80 turns) get relaxed (8m/14m/22m); missing-forecast falls back to medium default (4m/7m/11m) with an inline log. Multi-bead dispatches use the FASTEST cadence across the set per cron type. `--cron-cadence Nm` still overrides the bucket-computed value when set.
+
+**v7.1.0 — per-phase cron cadence re-arming is LIVE (fdev-lbq.29 implements fdev-lbq.27 spec).** Builds on the v7.1.0 forecast-driven initial cadence above. Step 4 of the dispatch protocol now invokes the Phase Transition Handler (PROTOCOL.md `### Phase Transition Handler (v7.1.0 LIVE)`) before auto-release. The handler computes current_phase from existing dispatch-file fields, compares to `phase_transitions[].last`, and on transition re-arms each cron via CronDelete-then-CronCreate at the phase-appropriate cadence (bucket × multiplier). `--auto-ack` peaks in `intent_confirm` and actively self-cancels on entry to `implementation`. `--auto-amend` peaks in `verify_amendment`. `--watch` stays at × 1 with the no-op optimization. The Step-4-only invocation is a known limitation; `/falcon transition <dispatch-id>` (fdev-lbq.31 pending) fills the gap. Cron telemetry (fdev-lbq.30 pending) will validate the multiplier table empirically when it lands.
 
 For wiring + four-cron coordination detail + teardown coverage: see [`PROTOCOL.md`](./PROTOCOL.md#--autopilot-mode-full-afk-bundle-v6110) `### --autopilot mode (full AFK bundle, v6.11.0)`.
 

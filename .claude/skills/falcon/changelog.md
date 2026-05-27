@@ -2,6 +2,201 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.1.0 (2026-05-27)
+
+**Forecast-driven initial cron cadence — LIVE (fdev-lbq.28 implements fdev-lbq.25 spec).** Step 2 of the dispatch protocol now reads each bead's Effort Forecast (Total turns + Confidence) at dispatch time and computes the initial CronCreate cadence per the bucket table:
+
+| Total Turns | Initial cadence (auto-ack / auto-amend / watch) |
+|---|---|
+| ≤ 15 (short)  | 2m / 4m / 6m |
+| 16-50 (medium) | 4m / 7m / 11m (default) |
+| > 50 (long) | 8m / 14m / 22m |
+
+Confidence modulator shifts one bucket faster (`low`) or slower (`high`). Missing/malformed Effort Forecast → medium bucket default + inline log. Multi-bead dispatches use the FASTEST cadence across the bead set per cron type. `--cron-cadence Nm` overrides the bucket-computed value.
+
+**Implementation details:**
+
+- Parser regex on the bead body (from `bd show --json <bead-id>`): `r'-\s*Total:\s*~?(\d+)\s*turns'` for Total, `r'-\s*Confidence:\s*(low|medium|high)'` for Confidence
+- 5 cron templates in REFERENCE.md (`--watch`, `--auto-ack`, `--auto-amend`, `--worker-cron`, `--release-on-merge`) had their CronCreate schedule strings parameterized via `{{ schedule_expression }}` substitution; `--worker-cron` and `--release-on-merge` are NOT bucket-computed (cadence is operator-supplied / PR-merge-polling-driven respectively)
+- Offset-staggering convention from fdev-lbq.5 still applies — `offset = (cron_slug_hash mod N)` heuristic produces well-distributed offsets at any bucket cadence
+- Step 0 adaptive-cadence guards from fdev-lbq.2/.3 unchanged — they fire on the same dispatch-file fields regardless of cadence value
+
+**Composition with other v7.x cadence work:**
+
+The cron cadence model now has THREE mechanisms operating at different scales:
+
+1. **Per-fire Step 0 adaptive guards (v7.0.1)** — short-circuits when state hasn't shifted. Token cost is what adapts.
+2. **Forecast-driven initial cadence (v7.1.0, this release)** — picks the initial bucket. Sets the cadence at CronCreate time.
+3. **Per-phase cadence re-arming (v7.1 spec, fdev-lbq.27/.29 pending)** — shifts cadence as the dispatch progresses through phases. Re-arms via CronCreate on transition.
+
+When all three are live, autopilot crons should land on signal-density > 30% across the dispatch lifetime per the fdev-lbq.6/.30 telemetry validation.
+
+**SKILL.md version bumped:** 7.0.1 → 7.1.0 (MINOR — new feature, backwards-compatible; v7.0.x dispatches without Effort Forecast still work via the fallback path).
+
+**Per-phase cron cadence re-arming — LIVE (fdev-lbq.29 implements fdev-lbq.27 spec).** Builds on the forecast-driven initial cadence above. Step 4 of the dispatch protocol now invokes the Phase Transition Handler before auto-release. The handler computes current_phase from existing dispatch-file fields, compares to phase_transitions[].last, and on transition re-arms each cron via CronDelete-then-CronCreate at the phase-appropriate cadence.
+
+Per-phase × per-cron multiplier table (multipliers stack on .28's bucket):
+
+  phase            --auto-ack  --auto-amend  --watch
+  pre_intent       × 2         × 2           × 1
+  intent_confirm   × 0.5       × 2           × 1
+  implementation   CronDelete  × 2           × 1
+  verify_amendment skipped     × 0.5         × 1
+  post_validated   self-cancel self-cancel   self-cancel
+
+**Discover-phase resolutions (fdev-lbq.29):**
+
+- **Auto-ack self-cancel ownership in `implementation` phase**: ACTIVE CronDelete by the Phase Transition Handler. Step 0 adaptive-cadence guard from fdev-lbq.2 remains in the auto-ack template as redundant safety but is no longer the canonical owner of the transition.
+- **verify_amendment auto-ack "(quiescent)" path**: handler checks `<cron>_cron_id` field at the top of each per-cron loop iteration; if null (already self-cancelled), skip entirely with `{cron: "autoack", skipped: true}` in cron_re_arms[]. No CronDelete attempt, no CronCreate, no error.
+- **Atomic-write ordering vs partial CronCreate failures**: handler collects ALL per-cron outcomes in memory FIRST (CronDelete + CronCreate results, including failure captures), then writes the dispatch file ONCE — both cron_id field updates AND the new phase_transitions[] entry — in a single atomic write. Each cron's outcome (re-armed / self-cancelled / no-op / skipped / failed) is captured in cron_re_arms[] regardless of success.
+
+**Watch-cron no-op optimization**: when new_cadence == current_cadence (most commonly the watch cron at × 1 across non-terminal phases), the handler skips CronDelete/CronCreate for that cron. Forensic record still appears in cron_re_arms[] as `{cron: "watch", no_op: true, ...}` for audit-trail completeness.
+
+**Known limitation: non-Step-4 invocations miss transitions.** If steering is invoked mid-dispatch without reaching Step 4 (e.g., `/falcon status` or `/falcon list-locks`), the handler does NOT auto-fire. Cron cadences stay at their last-armed value until the next Step 4 invocation. The `/falcon transition <dispatch-id>` operator command (pending in fdev-lbq.31) fills this gap as a deliberate manual-invocation path.
+
+**Composition with v7.0.1 + v7.1.0 other cadence work:**
+
+The cron cadence model now has THREE LIVE mechanisms operating at different scales:
+
+1. **Per-fire Step 0 adaptive guards (v7.0.1, fdev-lbq.2/.3)** — short-circuits when state hasn't shifted. Token cost is what adapts.
+2. **Forecast-driven initial cadence (v7.1.0, fdev-lbq.28)** — picks the initial bucket at CronCreate time.
+3. **Per-phase cadence re-arming (v7.1.0, fdev-lbq.29)** — shifts cadence as the dispatch progresses through phases. Re-arms via CronCreate on transition.
+
+**Cron telemetry instrumentation — LIVE (fdev-lbq.30 implements fdev-lbq.6 spec).** Each autopilot cron now follows a counter-increment contract: on fire entry, increment `cron_telemetry.<slug>.fires`; before exit, classify outcome (silent / useful) and increment the matching counter. Slug map: `watch` / `autoack` / `amend` / `worker` / `merge`. Invariant: `fires == silent + useful` at all times. Atomic-write discipline preserves correctness under concurrent fires. Backward compat: dispatches predating v7.1.0 with no `cron_telemetry` field are excluded from /falcon retro aggregation and reported on a final line.
+
+`/falcon retro --branch <name>` now emits a "Cron Telemetry" subsection in the RETRO SUMMARY block with per-cron `fires / silent / useful / signal_density` columns aggregated across all dispatches on the branch. Target signal density (per v7.1.0 design intent): > 30% per cron. The subsection also includes a "dispatches without telemetry: N" line for the legacy-dispatches accounting.
+
+Implementation contract is centralized in REFERENCE.md `### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)` (slug map + classify rules + atomic-write notes + backward-compat).
+
+With all three v7.1.0 features now LIVE (fdev-lbq.28 + fdev-lbq.29 + fdev-lbq.30), operators get end-to-end empirical autopilot calibration: forecast picks the initial bucket; per-phase re-arming shifts cadence through the lifecycle; telemetry validates whether the result lands on the > 30% signal-density target.
+
+**`/falcon transition <dispatch-id>` — LIVE (fdev-lbq.31).** Operator command that manually invokes the Phase Transition Handler against a dispatch. Fills the known limitation of fdev-lbq.29's Step-4-only auto-invocation pattern: operators running `/falcon status`, `/falcon list-locks`, or other read-only commands between Step-4-triggering events would otherwise miss intermediate phase transitions. Behavior: read dispatch file → refuse if not found OR `session_status: complete` → invoke the Handler (same code path Step 4 uses) → report inline (`No transition` if idempotent; `Transition: <prev> → <new>; crons re-armed: ...` if transition fired). COMMANDS.md adds the sub-command section; PROTOCOL.md cross-references from the Phase Transition Handler "Known limitation" subsection. Use cases: diagnostics (confirm current_phase), recovery (retry re-arm after a Step-4 graceful-degrade failure), proactive reconciliation during long-poll operator workflows.
+
+## 7.0.1 (2026-05-27)
+
+Bundled v7.0.x operational retro pass — multiple targeted fixes landed on the same release branch.
+
+### Detection-authority caveats: `claude --help` does NOT list `--bg`; falcon must not probe it (fdev-uwx)
+
+Adopters and AI assistants doing falcon-related work were repeatedly mis-identifying `--bg` as unsupported by probing `claude --help | grep -- --bg` (empty result despite the flag being supported on Claude Code ≥ 2.1.139). Falcon's own detection logic was already correct (version gate via `claude --version`, never `--help`) — but the docs didn't pre-empt the natural fallback of consulting `--help`. This version adds explicit "Detection authority — do NOT consult `claude --help`" caveats in PROTOCOL.md, COMMANDS.md, and README.md `Verify the install` so AI assistants reading falcon docs don't fall through to a `--help` probe.
+
+- `PROTOCOL.md` Step 2 §"Mode selection + detection" version-gate step — appended "Detection authority — do NOT consult `claude --help`" paragraph with rationale
+- `COMMANDS.md` `--bg ✓` detection sequence step 1 — appended short caveat with link back to PROTOCOL
+- `README.md` §"Verify the install" — adopter-facing heads-up that `claude --help` may not list `--bg`
+- `SKILL.md` frontmatter — `version: 7.0.0` → `7.0.1`
+
+### Cron emission dispatch-mode split: `--bg` uses inline `STATE:` lines; `--via-paste` keeps fences (fdev-lbq.9 + fdev-lbq.19)
+
+Production retro observation: in `--bg` mode, autopilot crons were emitting 20-30 line labeled-copy fences (intended for paste into a worker tab) AND an AI assistant was improvising `claude --resume <worker-session> --print "proceed <id>"` to "relay" the fence — only to be rejected by Claude Code with `Error: Session <uuid> is currently running as a background agent (bg). Use claude agents to find and attach to it, or add --fork-session to branch off a copy.` Both are vestigial paste-mode behaviors that don't fit `--bg` semantics (no worker tab to paste into; no peer-to-peer message-injection primitive for running `--bg` agents).
+
+This release adds explicit `Cron Dispatch-Mode Conventions (v7.0.1)` to REFERENCE.md establishing the dual-path contract, then applies mode-conditional emission across all five autopilot cron templates:
+
+- **`--watch`**, **`--auto-ack`**, **`--auto-amend`**, **`--release-on-merge`** templates now branch on `worker_dispatch_mode` at the emission step. In `--bg`: emit a single inline `STATE:` line; the file write of `intent_acknowledged_utc` / `amendments[].request` / `session_status: complete` is the contract; the worker self-polls via auto-ack-resume guard. In `--via-paste` / `--paste`: emit the full labeled-copy fence (unchanged).
+- **`--worker-cron`** template carries a defensive check that self-cancels if armed in `--bg` mode (it should never be — `--bg` suppresses it at emission time, but the defensive check catches operator missteps).
+- Explicit anti-pattern callouts in the conventions section: cron MUST NOT invoke `claude --resume` (Claude Code rejects on running `--bg` sessions) or `claude --fork-session` (creates duplicate session that violates falcon's single-worker-per-dispatch invariant).
+- PROTOCOL.md `### --bg dispatch mode` — added "Cron emission dispatch-mode split (v7.0.1)" subsection summarizing the contract and cross-referencing the REFERENCE.md conventions.
+- COMMANDS.md `### --autopilot ✓` — added v7.0.1 note summarizing the dual-path emission.
+
+No protocol-breaking changes for paste-mode operators. `--bg` operators see significantly less cron noise per fire (single line vs full fence) and no more `--resume` rejection errors in steering output.
+
+### Per-dispatch commit attribution: watch cron no longer emits N×N spurious STATUS UPDATEs on shared branch (fdev-lbq.4)
+
+Production retro observation: when N parallel dispatches share a branch (the v7.0.x parallel-dispatch model), the `--watch` cron's `commits_on_branch_since_open` metric was branch-global, not per-dispatch. When dispatch A pushed a commit, dispatch B's next watch fire saw `branch_total` ticked up and emitted a STATUS UPDATE — claiming a change that wasn't actually about dispatch B. With N dispatches, 1 commit produced N spurious updates (N×N worst case).
+
+Watch cron now computes per-dispatch attribution via the `Closes: <bead-id>` commit trailer (a Worker Lifecycle convention since pre-v7.0). Two metrics surface in the STATE: / STATUS UPDATE emission: `commits_attributed` (this dispatch's via trailer match) and `commits_unattributed` (everyone else's commits + amend/rebase that dropped the trailer). The attributed count drives state-change detection; the unattributed count fires a degraded "unattributed commit detected" notification ONLY when it GROWS since the prior fire (catches amend/rebase mistakes; ignores routine parallel-dispatch noise).
+
+- REFERENCE.md `--watch` cron Step 1 — rewrote the `git log` block to compute per-dispatch attribution + branch-wide unattributed counts
+- REFERENCE.md `--watch` cron Step 3 — STATE: and labeled-copy fence both now report `commits_attributed` + `commits_unattributed` separately; degraded notification fires on unattributed-grew
+- PROTOCOL.md `### --watch mode` — added "Per-dispatch commit attribution (v7.0.1, fdev-lbq.4)" subsection explaining the mechanism + the worker contract
+
+Worker-side contract reinforced: every commit MUST carry `Closes: <bead-id>` in the message. In single-dispatch mode this was best-practice; in parallel-dispatch mode it's now a correctness requirement. Workers already follow this convention per Worker Lifecycle Step 8; this release makes the watch-cron-side consumption explicit.
+
+### Adaptive cadence: per-fire cost short-circuits outside the relevance window (fdev-lbq.2 + fdev-lbq.3)
+
+Production retro: autopilot crons fire on fixed cadences (4m ack / 7m amend) for the entire dispatch lifecycle (~30-60 min), but each cron's relevance window is narrow — `--auto-ack` matters only intent-emission-to-ack (typically 5-20 min); `--auto-amend` matters only completion-to-validated (typically 1-3 fires after the worker emits COMPLETION). Outside these windows the existing in-template early-exits did fire, but each fire still read the full dispatch state before short-circuiting. Operator observation: "auto-ack fired 18 times, 17 silent exits, 1 useful = 5% signal density."
+
+Both write-bearing crons now have a **Step 0 — Adaptive cadence early-exit guard** at the top of their templates that probes ONLY the state-driving fields via a focused yq query (not a full file read), and exits silently when the cron is in a quiescent window. The cadence itself is unchanged (still 5m default); per-fire token cost is what becomes adaptive.
+
+**`--auto-ack` Step 0 quiescent windows:**
+
+- **Pre-intent**: implementation_intent is null → Step 1's existing null-check catches this; minimal additional cost.
+- **Post-ack**: `intent_acknowledged_utc` is non-null AND not terminal → Step 0 case 2 exits immediately.
+- **Terminal**: session_status == "complete" → Step 0 case 1 routes to Step 6 self-cancel.
+
+**`--auto-amend` Step 0 quiescent windows:**
+
+- **Pre-completion**: `implementation_results_hash` is null → Step 0 case 2 exits immediately.
+- **Budget-exhausted**: `auto_amendments_issued >= amendment_budget` → Step 0 case 3 exits immediately (the FIRST HALT detection still flows through Step 4 to emit AMENDMENT BUDGET EXHAUSTED; subsequent fires stay silent).
+- **Terminal**: session_status == "complete" → Step 0 case 1 routes to Step 7 self-cancel.
+
+CronCreate-driven cadence-change (re-arming at a slower cadence on state transition) was considered but deferred to v7.1 — the in-prompt Step 0 guard is the minimum-risk fix that captures most of the noise reduction without touching CronCreate semantics. PROTOCOL.md `### --watch mode` documents the dual-guard pattern; `### --auto-ack mode` and `### --auto-amend mode` cross-reference the REFERENCE.md Step 0 templates.
+
+### Worker termination primitives + `claude agents` CLI surface documented (fdev-lbq.8 + fdev-lbq.20 + fdev-lbq.21 + fdev-lbq.22)
+
+Three primitives that affect a running `--bg` worker have different effects; operators were conflating them. This release adds a comparison table to PROTOCOL.md `### --bg dispatch mode` and an extended CLI-surface reference to REFERENCE.md:
+
+| Goal | Right command | Effect |
+|------|---------------|--------|
+| Pause; resume on next user interaction | `claude stop <id>` (alias `claude kill`) | Process stops; state preserved; agent-viewer row stays. NOT terminal. |
+| Remove from agent-viewer entirely | `claude rm <id>` | Row disappears; transcript preserved via `claude --resume`; Claude-created worktree removed if clean. Terminal kill. |
+| Replace worker forensically | `/falcon respawn-fresh <id>` | New session ID + `-r<N>` suffix; prior session recorded in `worker_bg_prior_sessions[]`. Dispatch continues. |
+
+Plus the orthogonal Claude Code `claude respawn <id>` (CLI) — restart same session with conversation intact (e.g. to pick up updated Claude Code binary). NOT the same as `/falcon respawn-fresh`. The two-primitive disambiguation is called out in COMMANDS.md `### /falcon respawn-fresh`.
+
+**Supervisor-stop semantics corrected:** PROTOCOL.md L187 prose updated to match upstream agent-view docs. Auto-stop fires only on FINISHED sessions sitting unattached for ~1hr. Working / Needs-input / attached sessions are NOT auto-stopped. Pinned sessions (Ctrl+T in agent view) are exempt. The supervisor does NOT autonomously revive stopped sessions at a new pid; restart happens on user interaction (attach/peek/reply). The retro observation that "supervisor revived at a new pid" was a misreading of the user-interaction-driven restart path.
+
+**`claude agents` CLI surface reference table** added to REFERENCE.md before the `Cron Dispatch-Mode Conventions` subsection — covers `claude agents`, `--cwd`, `--json`, `attach`, `logs`, `stop`/`kill`, `rm`, `respawn`, `--bg`, `--version`, `daemon status`, plus explicit anti-patterns (`--resume`, `--fork-session`) so cron-template authors don't have to leave the falcon docs to look up the surface.
+
+Cross-references added to https://code.claude.com/docs/en/agent-view as the upstream source of truth.
+
+### `/falcon release` + `/wrapup` Task 0b now invoke `claude rm` to clear agent-viewer rows (fdev-lbq.18)
+
+Before this release, `/falcon release` and the Step 4 auto-release path cleaned up falcon-side state (lock registry, `session_status: complete`, stash archive) but did NOT remove the corresponding Claude Code agent-viewer row. Dead rows accumulated across multi-dispatch sessions until the supervisor's ~1hr auto-stop took them out (and even then, only for FINISHED sessions; sessions terminated abnormally could linger longer).
+
+This release adds a **poll-then-rm** ordering to Step 4 auto-release and `/falcon release`:
+
+1. Write `session_status: complete` and clear the lock registry (existing behavior).
+2. Poll the dispatch file for the worker's final report fields up to TIMEOUT (default 30s, tunable per-project).
+3. On poll success: invoke `claude rm <worker_bg_session_id>` to remove the agent-viewer row. Transcript remains preserved on disk via `claude --resume`.
+4. On TIMEOUT: log a single warning, then invoke `claude rm` anyway. Warning surfaces to operator for investigation.
+5. If `claude rm` reports an uncommitted worktree, surface the path inline.
+
+Skip `claude rm` in `--via-paste` / `--paste` modes (no agent-viewer row to remove) or when `worker_bg_session_id` is null (legacy dispatches).
+
+`/wrapup` Task 0b adds a post-release verification step that queries `claude agents --json` to confirm the row is gone; mismatches surface inline as warnings.
+
+Per fdev-lbq.8 docs: `claude rm` is the correct primitive here (NOT `claude stop`, which only stops the process but leaves the row).
+
+### Misc docs polish + small chores (fdev-lbq.5 + fdev-lbq.7 + fdev-lbq.12 + fdev-lbq.17 + fdev-lbq.23 + fdev-lbq.24)
+
+- **Cron-schedule offset staggering (fdev-lbq.5):** REFERENCE.md "Autopilot Cron Prompt Templates" now opens with a "Cron-schedule offset staggering (v7.0.1)" subsection recommending offset-staggered cron expressions per dispatch (e.g. `1,12,23,…` for watch; `2,7,12,…` for auto-ack) so multiple crons don't bunch fires at the same wall-clock minute. Includes an LCM analysis (5+7+11+15 → 1155-minute cycle) and a deterministic-offset heuristic (`offset = (cron_slug_hash mod N)`).
+- **AUP-recovery canonical path (fdev-lbq.7):** PROTOCOL.md `safety-tripped advisory` extended with an explicit decision tree: source-of-trip in init_prompt content → SPAWN FRESH DISPATCH (after hardening); source-of-trip in bead body → `/falcon respawn-fresh` (after rewriting the bead). Default if uncertain: prefer fresh dispatch path.
+- **Cognitive-audit hint stub expansion (fdev-lbq.12):** REFERENCE.md `falcon-autopilot.md template` §4 grew from 7 to 12 starter patterns. Five new domain-agnostic patterns added: `touches_prompt_template_or_skill_content`, `touches_security_policy_file`, `bumps_dependency_or_runtime_version`, `modifies_cron_schedule_or_template`, `introduces_new_dispatch_mode_or_flag`. All ship commented out (project opts in per `/falcon enable-autopilot` profile selection).
+- **Session-name prefix (fdev-lbq.17):** PROTOCOL.md `### --bg dispatch mode` Step 2 wiring now interpolates a `<prefix>-falcon-<dispatch-id>` session-name pattern, where `<prefix>` is the bd project prefix detected via `bd config get database.prefix`. Falls back to bare `falcon-<dispatch-id>` if no bd workspace is detected. Multi-project operators get visual grouping in `claude agents` rows.
+- **`--fork-session` anti-pattern (fdev-lbq.23):** documentation work already landed as part of fdev-lbq.9/.19/.22 — anti-pattern callouts present in PROTOCOL.md `### --bg dispatch mode`, REFERENCE.md `### Cron Dispatch-Mode Conventions` + `### claude agents CLI surface`, and COMMANDS.md `### --autopilot ✓`. Bead closed as already-implemented.
+- **Wake-phrase (`falcon poll`) (fdev-lbq.24):** REFERENCE.md default init_prompt template now recognizes the case-insensitive regex `^(falcon poll|/falcon-poll)\s*$` as a wake nudge — worker re-reads dispatch file, processes pending amendments, emits STATE: WAKE-PHRASE-PROCESSED, resumes prior context. Operators nudge idle/supervisor-stopped `--bg` workers via `claude agents` peek-and-reply without typing long instructions.
+
+### Distribution additions: PR template + workflow-execution updates
+
+- **`.claude/docs/PULL_REQUEST_TEMPLATE.md`** — new file. Adopters cloning falcon get a ready-to-use PR description template with sections for Summary / Changes (per-bead) / Schema-API changes / Files Changed table / Beads (planned + discovered + deferred) / Test Plan / Deploy Notes. The template is intentionally generic (no falcon-specific scaffolding) so it works for any project that vendors falcon.
+- **`.claude/rules/workflow-execution.md`** updates — refines the Confirmation Gates section (publication-intent rule, gated vs ungated table) + Post-PR updates procedure (full template re-review against cumulative work) + Autonomy-instructions-do-not-authorize-gated-actions guidance. Reference to `.claude/docs/PULL_REQUEST_TEMPLATE.md` added for post-PR reviews. Operators adopting falcon's workflow now have a clearer contract around when explicit user approval is required.
+
+### Spec-only additions (impl deferred to v7.1): forecast-driven cadence + cron telemetry + per-phase cron re-arming (fdev-lbq.25 + fdev-lbq.6 + fdev-lbq.27)
+
+Three design specs landed in v7.0.1 but their implementations defer to v7.1 because the in-prompt adaptive-cadence guards (fdev-lbq.2/.3) already capture the bulk of the noise-reduction benefit, and the deferred work touches more surface (CronCreate parameterization + dispatch-time bead-body parsing + per-phase re-arm coordination).
+
+- **Forecast-driven initial cadence (fdev-lbq.25)** — PROTOCOL.md `### --watch mode` documents the bucket table mapping bead Effort Forecast Total turns + Confidence to initial cron cadences (short / medium / long buckets, confidence modulator). v7.1 implementation will pick up Effort-Forecast parsing at Step 2.
+- **Cron telemetry field (fdev-lbq.6)** — REFERENCE.md Dispatch File YAML Schema adds the `cron_telemetry: {}` field with the per-cron `{fires, silent, useful}` schema. /falcon retro will read this in v7.1 to emit a "Cron Telemetry" subsection for empirical adaptive-cadence calibration.
+- **Per-phase cron cadence re-arming (fdev-lbq.27)** — PROTOCOL.md adds a `### Phase Transition Handler (v7.1)` section + a "Dispatch lifecycle phases" subsection inside `### Mode selection + detection`. Five phases (pre_intent / intent_confirm / implementation / verify_amendment / post_validated) compute from existing dispatch-file fields — no new `current_phase` schema field; the derivation rule is documented. A new `phase_transitions[]` schema field records forensic transition events. Per-phase × per-cron multiplier table specifies cadence shifts; multipliers stack on .25's bucket. The Handler runs steering-side (cron self-rescheduling is unreliable); transition detection is fresh-computed each invocation. Failure modes documented (CronDelete-already-self-cancelled → continue; CronCreate-failure → graceful degrade to OLD cadence; multi-transition-in-cycle → later-wins). REFERENCE.md Autopilot Cron Prompt Templates intro now has a "Two cadence-adaptation mechanisms (v7.1 spec; impl deferred)" subsection explaining how Step 0 per-fire guards (v7.0.1) compose with per-phase re-arm (v7.1). COMMANDS.md `### --autopilot ✓` adds a v7.1 note describing the per-phase behavior.
+
+### settings.local.json detection (fdev-lbq.26)
+
+Falcon's environment-detection logic (PROTOCOL.md Step 2 §"Mode selection + detection", step 3) previously consulted only `.claude/settings.json` (project) and `~/.claude/settings.json` (user) for the `disableAgentView` knob. It ignored the `.local.json` siblings, which are Claude Code's documented location for machine-specific overrides (gitignored conventionally). Operators setting `disableAgentView: true` in `.claude/settings.local.json` were surprised to see falcon try `--bg` anyway.
+
+This release extends the detection cascade to four files in this precedence order (highest-priority first): `<repo>/.claude/settings.local.json` → `<repo>/.claude/settings.json` → `~/.claude/settings.local.json` → `~/.claude/settings.json`. Matches Claude Code's own settings precedence (see https://code.claude.com/docs/en/settings). The downgrade message now names which specific file triggered the downgrade so operators can find and edit the right one.
+
+Updates in PROTOCOL.md Step 2 detection sequence + COMMANDS.md `--bg ✓` detection. No behavior change for operators who only use the non-`.local` files — those still cascade as before; `.local` siblings now take precedence when present.
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:
