@@ -2,7 +2,7 @@
 name: falcon
 description: Falcon — generate a self-contained prompt that ships a bead set to a remote session for autonomous work, returning a structured report this session can feed straight into /wrapup
 tier: dispatch
-version: 7.0.0
+version: 7.0.1
 created: 2026-05-21
 allowed-tools: Read, Bash, Write
 ---

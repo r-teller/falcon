@@ -2,6 +2,19 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.0.1 (2026-05-27)
+
+**Detection-authority caveats: `claude --help` does NOT list `--bg`; falcon must not probe it.** Adopters and AI assistants doing falcon-related work were repeatedly mis-identifying `--bg` as unsupported by probing `claude --help | grep -- --bg` (empty result despite the flag being supported on Claude Code ≥ 2.1.139). Falcon's own detection logic was already correct (version gate via `claude --version`, never `--help`) — but the docs didn't pre-empt the natural fallback of consulting `--help`. This version adds explicit "Detection authority — do NOT consult `claude --help`" caveats in PROTOCOL.md, COMMANDS.md, and README.md `Verify the install` so AI assistants reading falcon docs don't fall through to a `--help` probe.
+
+**Docs updated:**
+
+- `PROTOCOL.md` Step 2 §"Mode selection + detection" version-gate step — appended "Detection authority — do NOT consult `claude --help`" paragraph with rationale
+- `COMMANDS.md` `--bg ✓` detection sequence step 1 — appended short caveat with link back to PROTOCOL
+- `README.md` §"Verify the install" — adopter-facing heads-up that `claude --help` may not list `--bg`
+- `SKILL.md` frontmatter — `version: 7.0.0` → `7.0.1`
+
+No protocol-breaking changes; no behavior changes; pure docs/prompt additions.
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:
