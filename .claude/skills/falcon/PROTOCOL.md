@@ -158,8 +158,10 @@ When the effective mode is `--bg` (either default or explicit), after Step 1c (l
 1. Steering computes the bootstrap from the literal template in [`REFERENCE.md`](./REFERENCE.md#bootstrap-prompt-template-v700) `### Bootstrap Prompt Template (v7.0.0)`, substituting `dispatch_id` + `repo_path`. Bootstrap MUST include the literal `dispatch_id`, the absolute `repo_path`, and an instruction to VERIFY the loaded dispatch file's `dispatch_id` matches once read (mitigates the residual concern that steering code logic could pass a wrong ID — see "Architectural shifts" in the v7.0.0 changelog).
 2. Steering invokes (via Bash):
    ```
-   claude --bg --name "falcon-<dispatch-id>" "<bootstrap>"
+   claude --bg --name "<prefix>-falcon-<dispatch-id>" "<bootstrap>"
    ```
+   **Session-name prefix (v7.0.1, fdev-lbq.17):** `<prefix>` is the bd project prefix detected via `bd config get database.prefix` (or equivalent inspection of `.beads/`). Falls back to bare `falcon-<dispatch-id>` if no bd workspace is detected (operator using falcon outside a bd-managed project). Rationale: when multiple projects operate concurrently, `claude agents` rows look like `fdev-falcon-a3f8e9`, `myapp-falcon-b27c41` — project sorts first, so all dispatches within a project cluster together visually. Complements `claude agents --cwd <path>` (v2.1.141+) which provides per-directory filtering at the CLI level.
+
    If `--bg-isolated` is set: append `--worktree` (or whichever Claude Code flag triggers isolation; flag name defers to Claude Code's CLI). If `--bg-no-isolation`: append the Claude-Code-side opt-out flag. If neither: defer to the project's `worktree.bgIsolation` setting; if no setting, defer to Claude Code's default.
 3. Capture the returned session ID. Write to `worker_bg_session_id` on the dispatch file (atomic; preserve other fields).
 4. Emit the steering-session output block:
@@ -859,6 +861,46 @@ Implementation:
    ```
 
 **safety-tripped advisory (REQUIRED implementer constraint per development-standards.md §3.15):** if `reason: safety-tripped`, the prior session's log may contain the triggering content. The implementer MUST NOT read `claude logs <prior-session-id>` in a new session for forensics — the log may reproduce the triggering content and re-trip the safety filter in the reader's session. The safe recovery path is `/falcon respawn-fresh` + capturing the `reason` code; deeper forensics on the contaminated content is out-of-band and operator-responsibility. The forensic record (timestamp + reason code in `worker_bg_prior_sessions[]`) is sufficient for retro analysis without reading logs.
+
+**AUP-recovery decision tree (v7.0.1, fdev-lbq.7):** when a worker reports AUP (Anthropic Usage Policy) trip — almost always surfaced as `reason: safety-tripped` — operators face a choice between `/falcon respawn-fresh` and spawning a fresh dispatch with a hardened init_prompt. The correct choice depends on what tripped the filter:
+
+```
+Worker reports session_status: failed, reason: safety-tripped
+│
+├── Source of trip: init_prompt content (skill prompts, autopilot rules, or
+│   project rules referenced from init_prompt)
+│   → DO NOT /falcon respawn-fresh — it preserves the init_prompt, which is
+│     what tripped the filter; the fresh session would just trip again on
+│     the same content.
+│   → SPAWN A FRESH DISPATCH:
+│       1. Edit the offending init_prompt content (PROTOCOL.md, REFERENCE.md
+│          init_prompt template, .claude/rules/*.md, OR project rules pulled
+│          in via the rules reference).
+│       2. Commit the harden.
+│       3. Open a fresh dispatch on the same bead set:
+│            /falcon work beads <bead-spec>
+│          The new dispatch loads the now-hardened init_prompt.
+│       4. Manually close the old dispatch via /falcon release <old-id>
+│          (the old worker is dead; no auto-release will fire).
+│
+└── Source of trip: bead body content (the work itself referenced sensitive
+    material — e.g. customer PII in a bug-repro script, security incident
+    details in a postmortem doc, sensitive credential names)
+    → /falcon respawn-fresh IS appropriate after rewriting the bead body.
+      The init_prompt is fine; only the bead content needs hardening.
+    → SEQUENCE:
+        1. Identify the offending bead body section (without reading the
+           prior session's logs — those carry the contaminated content).
+        2. Edit the bead via bd update <id> --body-file <hardened.md> or
+           equivalent.
+        3. /falcon respawn-fresh <dispatch-id> --reason=safety-tripped
+           — the new worker loads the (preserved) init_prompt + the now-
+           hardened bead body.
+```
+
+**Default if uncertain:** prefer the SPAWN FRESH DISPATCH path. It's the higher-overhead but lower-risk option — a hardened init_prompt is permanently safer for future dispatches, whereas respawn-fresh only fixes the current dispatch.
+
+`claude respawn <id>` (the CLI primitive — restart same session) is the WRONG choice for AUP recovery in either case — it restarts the prior conversation including any contaminated state.
 
 **Compatibility:**
 

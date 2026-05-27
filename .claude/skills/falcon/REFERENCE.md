@@ -553,6 +553,7 @@ For each bead not in `triage:ready`, the steering session has marked one of:
 - **Verification close gate:** the bead's Testing Strategy + project verification-gate rules. Observable evidence required BEFORE `bd close`, not after. If the bead names out-of-band or encapsulator verification, set `verification.out_of_band_required: true` and leave bead `in_progress`.
 - **Return contract:** REFERENCE.md "## Worker Return Contract". Write to `implementation_results` + compute `sha256(implementation_results_content)` into `implementation_results_hash` in the same atomic write. Do NOT paste the YAML inline in chat. Emit the COMPLETION block per the labeled-copy convention.
 - **Amendments cycle:** PROTOCOL.md Worker Lifecycle Step 13. Check `session_status` on each resume prompt; execute pending amendments per the spec.
+- **Wake-phrase recognition (v7.0.1, fdev-lbq.24):** if a user message in this session matches the case-insensitive regex `^(falcon poll|/falcon-poll)\s*$`, treat it as a wake nudge: (1) Read the dispatch file at the path your bootstrap recorded; (2) process any `amendments[]` entries whose `handled_utc` is null per the Amendments Workflow; (3) emit a single inline `STATE: WAKE-PHRASE-PROCESSED dispatch={{ dispatch_id }} amendments_handled=<n>` line; (4) resume the prior context (waiting for ack, executing, etc.) — do NOT exit the session or claim a new bead. This phrase exists for `--bg` operators to nudge an idle/supervisor-stopped worker back into the autopilot loop via `claude agents` peek-and-reply without having to type a long instruction; in `--via-paste` mode it works identically when typed into the worker tab.
 ```
 
 (End of default init_prompt content template.)
@@ -1104,6 +1105,53 @@ cognitive_audit_hints:
   #   prompts:
   #     - "Does the produced output shape match the sibling bead's AC declared input?"
   #     - "If sibling is in_progress in a concurrent dispatch, is the consumer reading the right hash/path?"
+
+  # touches_prompt_template_or_skill_content (v7.0.1, fdev-lbq.12):
+  #   trigger: |
+  #     Any commit touches files in .claude/skills/, .claude/agents/, or
+  #     .claude/commands/ — anything that the runtime treats as a prompt.
+  #   prompts:
+  #     - "Was the prompt change reviewed for prompt-injection or unintended tool-grant patterns?"
+  #     - "Did the change preserve the version: frontmatter bump if behavior-altering?"
+  #     - "Did the changelog get an entry naming the prompt/skill affected?"
+  #     - "If the change touches a worker init_prompt, does it preserve the auto-ack-resume guard semantics?"
+  #
+  # touches_security_policy_file (v7.0.1, fdev-lbq.12):
+  #   trigger: |
+  #     Any commit touches .claude/rules/falcon-autopilot.md, .claude/security.md,
+  #     or any file under .github/workflows that gates merges.
+  #   prompts:
+  #     - "Was the gate change reviewed for refuse-on-MVM preservation?"
+  #     - "Did the change loosen any SAFE_TO_ACK_INTENT or SAFE_TO_AMEND predicate without a sibling test?"
+  #     - "If the change extends autopilot autonomy, was it accompanied by an amendment-budget reduction or other compensating control?"
+  #
+  # bumps_dependency_or_runtime_version (v7.0.1, fdev-lbq.12):
+  #   trigger: |
+  #     Any commit changes pinned version in package.json, requirements.txt,
+  #     pyproject.toml, go.mod, Gemfile.lock, OR the minimum Claude Code version
+  #     in SKILL.md frontmatter.
+  #   prompts:
+  #     - "Did changelog and README minimum-version notes update in lockstep with the bump?"
+  #     - "Were breaking changes in the bumped dependency reflected in falcon's own behavior or docs?"
+  #     - "If bumping Claude Code minimum: does auto-downgrade still trigger correctly on the prior version?"
+  #
+  # modifies_cron_schedule_or_template (v7.0.1, fdev-lbq.12):
+  #   trigger: |
+  #     Any commit touches REFERENCE.md `## Autopilot Cron Prompt Templates`
+  #     OR changes the default --cron-cadence in COMMANDS.md.
+  #   prompts:
+  #     - "Was the change reviewed against the Cron Dispatch-Mode Conventions for both --bg and --via-paste paths?"
+  #     - "Does the offset-staggering still hold after the change?"
+  #     - "Were both single-dispatch and parallel-dispatch attribution tests run in the scoring/smoke pass?"
+  #
+  # introduces_new_dispatch_mode_or_flag (v7.0.1, fdev-lbq.12):
+  #   trigger: |
+  #     Any commit adds a new --bg-*, --paste-*, --autopilot-* flag OR a new
+  #     dispatch-mode value in worker_dispatch_mode.
+  #   prompts:
+  #     - "Was the new flag added to PROTOCOL.md `### Mode selection + detection`?"
+  #     - "Did the cron templates' worker_dispatch_mode branch get extended to cover the new mode?"
+  #     - "Does the new flag preserve the refuse-on-MVM precedent if it's write-bearing?"
 ```
 
 ---
@@ -1518,6 +1566,25 @@ Cron ID naming convention: `falcon-watch-<dispatch-id>` (Phase 1, this section).
 Snapshot-file convention: each cron-armed dispatch gets a sidecar `.claude/tmp/falcon-watch-<dispatch-id>-state.json` (one per cron slug per dispatch) that carries the cron's last-observed state so successive fires can detect transitions. The cron writes after each fire; the snapshot is removed on self-cancel (terminal state) or by `/falcon release-cron`.
 
 This section is the registry. Phase 1 (v6.8.0) lands the `--watch` template; subsequent phases append additional templates here as they ship.
+
+### Cron-schedule offset staggering (v7.0.1, fdev-lbq.5)
+
+The `CronCreate` examples in each template below use `cron: "*/<N> * * * *"` for readability — but at substitution time, steering Step 2 SHOULD compute offset-staggered cron expressions per dispatch so multiple crons don't bunch their fires at the same minute boundary.
+
+Without staggering, every `*/N` cron fires at minutes divisible by N (e.g. `*/4` fires at :00, :04, :08, …). When 3-4 crons share a dispatch (watch + auto-ack + auto-amend + release-on-merge), several can fire in the same wall-clock minute — observed in production retro as "3 crons firing in one steering turn" bursts.
+
+Recommended substitution at Step 2 (per dispatch — different dispatches can pick different offsets to spread load further):
+
+| Cron | Default cadence | Staggered cron expression (offset N) |
+|------|-----------------|--------------------------------------|
+| `--watch` | 11m | `1,12,23,34,45,56 * * * *` (offset 1 from minute boundary) |
+| `--auto-ack` | 5m | `2,7,12,17,22,27,32,37,42,47,52,57 * * * *` (offset 2) |
+| `--auto-amend` | 7m | `4,11,18,25,32,39,46,53 * * * *` (offset 4) |
+| `--release-on-merge` | 15m | `5,20,35,50 * * * *` (offset 5) |
+
+The LCM of cadences (5, 7, 11, 15) is 1155 minutes — total alignment cycle is ~19hr. Within any given minute, at most 1 cron should fire if the offsets are chosen carefully. The `*/N` shorthand in each template below is the simplified form; steering MAY emit the staggered form at CronCreate-time without changing semantics.
+
+If the cadence is overridden via `--cron-cadence Nm`, the offset SHOULD shift to maintain LCM-minimization. A reasonable heuristic: pick `offset = (cron_slug_hash mod N)` where `cron_slug_hash` is the SHA256 of `falcon-<role>-<dispatch-id>` reduced to an integer. This deterministically spreads multiple dispatches across the cycle.
 
 ### `claude agents` CLI surface (v7.0.1)
 
