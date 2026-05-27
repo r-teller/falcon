@@ -608,9 +608,58 @@ For each bead not in `triage:ready`, the steering session has marked one of:
 - **Return contract:** REFERENCE.md "## Worker Return Contract". Write to `implementation_results` + compute `sha256(implementation_results_content)` into `implementation_results_hash` in the same atomic write. Do NOT paste the YAML inline in chat. Emit the COMPLETION block per the labeled-copy convention.
 - **Amendments cycle:** PROTOCOL.md Worker Lifecycle Step 13. Check `session_status` on each resume prompt; execute pending amendments per the spec.
 - **Wake-phrase recognition (v7.0.1, fdev-lbq.24):** if a user message in this session matches the case-insensitive regex `^(falcon poll|/falcon-poll)\s*$`, treat it as a wake nudge: (1) Read the dispatch file at the path your bootstrap recorded; (2) process any `amendments[]` entries whose `handled_utc` is null per the Amendments Workflow; (3) emit a single inline `STATE: WAKE-PHRASE-PROCESSED dispatch={{ dispatch_id }} amendments_handled=<n>` line; (4) resume the prior context (waiting for ack, executing, etc.) — do NOT exit the session or claim a new bead. This phrase exists for `--bg` operators to nudge an idle/supervisor-stopped worker back into the autopilot loop via `claude agents` peek-and-reply without having to type a long instruction; in `--via-paste` mode it works identically when typed into the worker tab.
+
+### Worker self-poll at pause points (--bg mode only, v7.1.1)
+
+In `--bg` mode (when `worker_dispatch_mode == "bg"` on this dispatch file), arm a self-poll `CronCreate` at each pause-for-steering point so steering's autopilot ack/amendment writes are observed without an external poke. Two armable points: intent emission (Step 3) and DAR pause-for-response. For the literal `CronCreate` substitution blocks, see REFERENCE.md `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)` below. `CronDelete <self-id>` on wait-condition-satisfied is mandatory. `durable: false` is mandatory. Arm ONLY at the two pause points above — NEVER as an always-on background poller. Do NOT arm in `--via-paste` / `--paste` modes (operator paste / worker-cron handles those modes). See PROTOCOL.md `### Worker self-poll at pause points (v7.1.1)` for full coordination rationale.
 ```
 
 (End of default init_prompt content template.)
+
+---
+
+## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)
+
+Literal `CronCreate` substitution blocks referenced by `## init_prompt Content Template` § `### Worker self-poll at pause points (--bg mode only, v7.1.1)` and by PROTOCOL.md `### Worker self-poll at pause points (v7.1.1)`. The worker substitutes `{{ dispatch_file_path }}` and `{{ branch_name }}` (and DAR `request_id` where applicable) from its bootstrap and dispatch-file context. Both crons are armed by the WORKER, not steering.
+
+**At intent emission** — after writing `implementation_intent` and BEFORE the STOP-await-ack pause at Worker Lifecycle Step 3:
+
+```
+CronCreate(
+  cron="*/2 * * * *",
+  recurring=true,
+  durable=false,
+  prompt="Re-read {{ dispatch_file_path }}. If intent_acknowledged_utc
+          is non-null AND `git log origin/{{ branch_name }} --oneline
+          --since=<dispatch.created_utc>` returns zero entries from
+          this worker's commit set: CronDelete <self-id> and resume
+          the worker session past intent-confirm into Step 4 (bd
+          update -s in_progress). Otherwise silent."
+)
+```
+
+Capture the returned cron ID. On the worker's next active turn (whether triggered by the self-poll itself or by any other wake path), if `intent_acknowledged_utc` is observed non-null, `CronDelete` the captured cron ID before proceeding.
+
+**At DAR pause for response** — after writing an `out_of_spec_approval_requests[]` entry with `response: null` IF the worker stays alive waiting on the response (rather than partial-reporting per the HIGH-stakes DAR path in PROTOCOL.md `### DAR protocol`):
+
+```
+CronCreate(
+  cron="*/3 * * * *",
+  recurring=true,
+  durable=false,
+  prompt="Re-read {{ dispatch_file_path }}. If the
+          out_of_spec_approval_requests[] entry with request_id=<id>
+          has its `response` field non-null: CronDelete <self-id>
+          and resume the worker to incorporate the response.
+          Otherwise silent."
+)
+```
+
+`CronDelete` on observed response.
+
+**Mode applicability.** Both blocks are `--bg`-mode only. In `--via-paste` / `--paste` modes, do NOT arm these crons — the operator's `proceed {{ dispatch_id }}` paste (or the worker-cron polling the dispatch file in `--via-paste`) is the wake mechanism. The template's mode-skip note enforces this; this section documents the literal block for that conditional.
+
+**Scope guardrail.** Arm ONLY at the two pause points above. Never arm an always-on background poller. `durable: false` is mandatory — the cron must die with the worker session if the operator kills the agent.
 
 ---
 

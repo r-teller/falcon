@@ -2,6 +2,26 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.1.1 (2026-05-27)
+
+**Worker self-poll at pause points — closes the `--bg` `--autopilot` AFK wake-gap (fdev-0wv).** In `--bg` mode (v7.0.0+ default), steering's autopilot crons (`--auto-ack`, `--auto-amend`) faithfully write decisions to the dispatch file, but the worker session — idle in `claude agents` at intent-confirm — never observes those writes without an external poke (peek/reply, attach, `falcon poll`). The auto-ack-resume guard (PROTOCOL.md Worker Lifecycle Step 3) only fires when the worker takes a turn; it has no mechanism to schedule that turn itself. The documented "full AFK bundle" promise of `--autopilot` therefore degraded in `--bg` to "AFK except for the intent-ack wake injection" — exactly the pause point that most benefits from autonomous progression.
+
+**Fix.** A worker-side convention (NOT a new flag, NOT a schema change). At intent-emission and DAR-response pause points, the worker arms a self-poll `CronCreate` scoped to the wait condition (`intent_acknowledged_utc` non-null + zero commits landed; or DAR entry's `response` field non-null), then `CronDelete <self-id>`s the moment the condition is satisfied. `durable: false` ensures the cron dies with the worker session.
+
+**Changes:**
+
+- `PROTOCOL.md` § `--bg dispatch mode (v7.0.0)`: new subsection `### Worker self-poll at pause points (v7.1.1)` describing the convention, the two armable points, the scope guardrail, and coordination/cost rationale
+- `PROTOCOL.md` § Worker Lifecycle Step 3: explicit reference to the intent self-poll in the intent-confirm-pause body
+- `PROTOCOL.md` § DAR protocol: explicit reference to the DAR self-poll for the pause-for-response case
+- `REFERENCE.md` § init_prompt Content Template (default thin/pointer-style): new subsection `### Worker self-poll at pause points (--bg mode only, v7.1.1)` with the two literal `CronCreate` blocks (intent + DAR), plus an explicit `--via-paste` / `--paste` mode-skip note
+- `SKILL.md` frontmatter: `version: 7.1.0` → `version: 7.1.1`
+
+**Out of scope (explicit non-goals).** `--worker-cron` flag behavior in `--bg` stays a SILENT NO-OP as documented in v7.0.0 (the self-poll is a worker-side convention, not a steering flag). No new dispatch-file schema fields. No new IPC primitive — leverages existing atomic-write semantics on the dispatch file (v6.11.0). `--via-paste` / `--paste` modes do NOT arm the self-poll (operator paste / worker-cron handles those modes' wake mechanics).
+
+**Real-world provenance.** Observed during a 7-wave sequential epic dispatch on `feature/work-20260526-phase2` (sticker-shop project). Steering cron auto-acked every intent paragraph across 4 dispatches with 8-gate validation; each dispatch still stalled ~5-10 min waiting for human ack relay despite the gate evaluation being instant and trustworthy. Filed as fdev-0wv in falcon-dev (discovered-from fdev-lbq).
+
+**SKILL.md version bumped:** 7.1.0 → 7.1.1 (PATCH — fixes the v7.0.0 `--bg` wake-gap; restores documented `--autopilot` AFK promise; no new flags, no schema change, no behavior change for existing `--via-paste` / `--paste` dispatches).
+
 ## 7.1.0 (2026-05-27)
 
 **Forecast-driven initial cron cadence — LIVE (fdev-lbq.28 implements fdev-lbq.25 spec).** Step 2 of the dispatch protocol now reads each bead's Effort Forecast (Total turns + Confidence) at dispatch time and computes the initial CronCreate cadence per the bucket table:
