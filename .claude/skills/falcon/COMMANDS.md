@@ -522,6 +522,8 @@ User pastes both into the worker tab in order. The worker session reads the disp
 
 Use when: "I'm going AFK and authorized everything safe to proceed without me."
 
+**v7.0.1 — cron emission dispatch-mode split.** All four autopilot crons (`--watch`, `--auto-ack`, `--auto-amend`, `--release-on-merge` when armed) branch their emission shape on `worker_dispatch_mode`. In `--bg` mode they emit single-line `STATE:` notifications (no fences) and rely on file writes for state-change contract. In `--via-paste` / `--paste` modes they emit the full labeled-copy fence (operator pastes into the worker tab). Crons MUST NOT invoke `claude --resume <worker-session>` or `claude --fork-session` against a running `--bg` worker — both are anti-patterns (the former is rejected by Claude Code; the latter creates a duplicate session that violates single-worker-per-dispatch). See REFERENCE.md `### Cron Dispatch-Mode Conventions (v7.0.1)` for the full rules and PROTOCOL.md `### --bg dispatch mode` for the wiring.
+
 For wiring + four-cron coordination detail + teardown coverage: see [`PROTOCOL.md`](./PROTOCOL.md#--autopilot-mode-full-afk-bundle-v6110) `### --autopilot mode (full AFK bundle, v6.11.0)`.
 
 **Prerequisites** (the macro REFUSES on first cron fire if not met):

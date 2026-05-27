@@ -1519,6 +1519,33 @@ Snapshot-file convention: each cron-armed dispatch gets a sidecar `.claude/tmp/f
 
 This section is the registry. Phase 1 (v6.8.0) lands the `--watch` template; subsequent phases append additional templates here as they ship.
 
+### Cron Dispatch-Mode Conventions (v7.0.1)
+
+Every cron template below reads `worker_dispatch_mode` from the dispatch file at fire-time and branches on it. The two paths have fundamentally different interaction contracts. Each template's emission step and manual-ack guidance are mode-conditional per the rules below; the rules are written here once to avoid duplication across 5 templates.
+
+**`--bg` path** (worker is a Claude Code background agent, v7.0.0+ default on Claude Code ≥ 2.1.139):
+
+- **Cron→worker interaction is FILE WRITES ONLY.** The dispatch file is the sole state-change interface. Write `intent_acknowledged_utc`, append to `amendments[]`, etc. Worker picks up via auto-ack-resume guard or self-poll on next active turn.
+- **DO NOT invoke `claude --resume <worker-session>` against a running --bg agent.** Claude Code refuses with `Error: Session <uuid> is currently running as a background agent (bg). Use claude agents to find and attach to it, or add --fork-session to branch off a copy.` The cron output becomes noisy stderr; the worker doesn't get the nudge. Per upstream agent-view doc, there is NO scriptable peer-to-peer message-injection primitive for running `--bg` sessions.
+- **DO NOT invoke `claude --fork-session`** even though the error message above suggests it. Forking creates a DUPLICATE session — original `--bg` worker AND a forked copy could both write to the dispatch file, double-claim file scope, double-commit. This violates falcon's single-worker-per-dispatch invariant. The error message's suggestion is wrong for falcon's use case.
+- **Emission shape** (when state changes): emit a single inline `STATE:` line, NOT a labeled-copy fence:
+  ```
+  STATE: <event> dispatch=<id> <key>=<value>,<key>=<value>,...
+  ```
+  Rationale: `--bg` operators monitor the steering session's chat for cron output. No paste-into-worker-tab step is needed (worker reads the file directly). A 20-30 line fence is vestigial overhead; a one-line state notification preserves the operator's signal density.
+- **Manual nudge mechanism** (when operator wants to wake an idle/stopped `--bg` worker): operator opens `claude agents`, presses `Space` on the worker's row to peek, and types either `proceed <dispatch-id>` (to relay the ack manually) or `falcon poll` (per the wake-phrase convention — worker re-reads dispatch file + emits STATE:). The cron MUST NOT attempt this from its own context.
+
+**`--via-paste` path** (worker is an operator-attached Claude Code tab; pre-v7.0.0 default):
+
+- **Cron→worker interaction is FILE WRITES + LABELED-COPY FENCE.** The dispatch file is still authoritative for state, AND the cron emits a fence the operator pastes into the worker tab. Workers in `--via-paste` mode do NOT have an auto-ack-resume guard; they rely on the operator's paste action to receive cron output.
+- **DO NOT invoke `claude --resume`** here either. Even in `--via-paste`, the path is paste-driven, not `--resume`-driven. The worker tab is interactively attached.
+- **Emission shape**: full labeled-copy fence as documented in the per-template emission sections below.
+- **Manual ack/nudge**: operator pastes the fence contents into the worker tab; the worker reads as a regular user message.
+
+**`--paste` path** (cross-machine fallback): behaves like `--via-paste` for cron emission purposes. The cross-machine aspect is handled by the dispatch-file-on-shared-filesystem assumption being relaxed; the cron emission shape itself is the same as `--via-paste`.
+
+**Mode detection inside each cron template**: read `worker_dispatch_mode` from the dispatch file at Step 1 alongside the other state fields. Branch on it in the emission step (Step 3 or 4 depending on template) and the manual-ack/nudge guidance.
+
 ### `--watch` cron prompt template (v6.8.0)
 
 Fired by the cron armed at Step 2 of the dispatch protocol when `--watch` is set. Report-only — never writes to the dispatch file, never auto-acks, never auto-amends. The cron self-cancels on terminal `session_status: complete`.
@@ -1559,6 +1586,7 @@ Capture the following fields from the dispatch:
 - watch_cron_id               (this cron's own ID; sanity check)
 - auto_amendments_issued      (Phase 3 will populate; Phase 1 reads as status, does not act)
 - amendment_budget            (Phase 3 will populate; Phase 1 reads as status, does not act)
+- worker_dispatch_mode        ("bg" | "via-paste" | "paste" — drives Step 3 emission shape per "Cron Dispatch-Mode Conventions (v7.0.1)" above)
 
 For each bead in bead_ids[]:
 - Run `bd show --json <bead-id>` and capture status.
@@ -1581,8 +1609,19 @@ state. Then write the current state to the snapshot file and exit.
 If prior_state matches current state on every captured field: exit silently
 (no emission, no snapshot write).
 
-If any field changed: emit a formatted status block using the v6.5.3
-labeled-copy convention with label `STATUS UPDATE`.
+If any field changed: emit a formatted notification per `worker_dispatch_mode`:
+
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline `STATE:` line
+  (no fence), per "Cron Dispatch-Mode Conventions (v7.0.1)" above. Format:
+
+      STATE: WATCH-STATUS-UPDATE dispatch={{ dispatch_id }} session_status=<value> intent_acknowledged_utc=<value> implementation_results_hash=<presence> amendments=<count> beads=<dot-separated id:status> commits_since_open=<count>
+
+  If the high-stakes DAR headline applies (see v6.12.2 paragraph below), prepend
+  it as a separate line above the STATE: line — keep both inline, no fences.
+
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit a formatted
+  labeled-copy block using the v6.5.3 convention with label `STATUS UPDATE`
+  (full fence template below).
 
 **v6.12.2 — high-stakes DAR headline:** before emitting the block,
 inspect `implementation_results.falcon_report.decisions_for_human[]` (if
@@ -1598,6 +1637,10 @@ state-change body:
 This makes the DAR call out from a long inline history of routine STATUS
 UPDATE blocks. If no high-stakes DARs are pending, skip the headline; emit
 the body as before.
+
+(The labeled-copy block below applies ONLY to `--via-paste` / `--paste`
+modes; in `--bg` mode the cron emits the inline `STATE:` line shown above
+instead.)
 
     ## STATUS UPDATE — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
 
@@ -1688,6 +1731,7 @@ Capture:
 - file_scope                  (directories[] + files[])
 - bead_ids[]                  (for cross-checking the intent's Changes Needed reference)
 - amendments[]                (count — for cross-dispatch-conditional check)
+- worker_dispatch_mode        ("bg" | "via-paste" | "paste" — drives all emission shapes below per "Cron Dispatch-Mode Conventions (v7.0.1)")
 
 If session_status == "complete": self-cancel (Step 5 below) and exit.
 If implementation_intent is null: nothing to ack; exit silently.
@@ -1710,22 +1754,30 @@ REFUSE (do NOT auto-ack, do NOT write anything) if any of the following hold:
 - File does not exist → emit refuse-block citing "falcon-autopilot.md not committed; run /falcon create-rules and uncomment gate sections, OR ack intent manually."
 - File exists but every `# PROJECT —` section under `## 1. SAFE_TO_ACK_INTENT predicate` is commented (minimum-viable mode) → emit refuse-block naming the specific gate the user should uncomment. Universal gates alone are NOT sufficient for --auto-ack writes; the project must opt in.
 
-Refuse-block uses the v6.5.3 labeled-copy convention with label `AUTO-ACK REFUSED`:
+Refuse-block emission is mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":
 
-    ## AUTO-ACK REFUSED — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    Dispatch {{ dispatch_id }} intent acknowledgement refused.
+      STATE: AUTO-ACK-REFUSED dispatch={{ dispatch_id }} reason=<short-code> action=<short-code> manual_ack=peek-and-reply-`proceed {{ dispatch_id }}`-OR-`falcon poll`
 
-    Reason: <one-line — missing file / all PROJECT gates commented>
-    Action: <specific instruction — run /falcon create-rules / uncomment
-             `safe_to_ack_intent.project_gates.<gate-name>` in
-             .claude/rules/falcon-autopilot.md>
+  No fence. Operator nudges via `claude agents` peek-and-reply if they want to relay the ack manually (per Cron Dispatch-Mode Conventions §`--bg` path).
 
-    Manual ack alternative: paste `proceed {{ dispatch_id }}` to the worker tab.
-    ~~~
-    ═══ END COPY ═══
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block with label `AUTO-ACK REFUSED`:
+
+      ## AUTO-ACK REFUSED — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
+
+      ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+      ~~~
+      Dispatch {{ dispatch_id }} intent acknowledgement refused.
+
+      Reason: <one-line — missing file / all PROJECT gates commented>
+      Action: <specific instruction — run /falcon create-rules / uncomment
+               `safe_to_ack_intent.project_gates.<gate-name>` in
+               .claude/rules/falcon-autopilot.md>
+
+      Manual ack alternative: paste `proceed {{ dispatch_id }}` to the worker tab.
+      ~~~
+      ═══ END COPY ═══
 
 Write the current intent hash to the snapshot file (so the same refuse doesn't fire again next cron tick), then exit.
 
@@ -1738,43 +1790,59 @@ For each gate under `safe_to_ack_intent.gates` (universal) + each uncommented ga
 3. `intent_matches_changes_needed` — for each bead in bead_ids[], `bd show --json <id>` to load the Changes Needed file list. Extract file paths + key nouns from intent; overlap must be ≥ 50% of Changes Needed items by token count.
 4. `no_open_dar_arbitration` — read `.claude/tmp/falcon-reports-<sanitized-branch>.yaml` (derive sanitized branch via `git rev-parse --abbrev-ref HEAD | tr '/' '-'`). Any decisions_for_human[] entry with stakes: high and unrecorded resolution fails this gate.
 
-If ANY gate fails: emit a defer-block (label `AUTO-ACK DEFERRED`) citing which gate failed + why + the manual-ack alternative. Write current intent hash to snapshot. Exit.
+If ANY gate fails: emit a defer notification citing which gate failed + why + the manual-ack alternative. Write current intent hash to snapshot. Exit.
 
-Defer-block format:
+Defer emission is mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":
 
-    ## AUTO-ACK DEFERRED — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    Dispatch {{ dispatch_id }} intent NOT auto-acked.
+      STATE: AUTO-ACK-DEFERRED dispatch={{ dispatch_id }} failed_gate=<gate-name> reason=<short-code> manual_ack=peek-and-reply-`proceed {{ dispatch_id }}`
 
-    Failed gate: <gate name>
-    Reason: <one-line — what the intent said that triggered the fail>
+  No fence. Operator reviews the intent (via peek), arbitrates, and relays `proceed {{ dispatch_id }}` manually via peek-and-reply if appropriate.
 
-    Manual ack: paste `proceed {{ dispatch_id }}` to the worker tab after
-    confirming the intent is acceptable.
-    ~~~
-    ═══ END COPY ═══
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block with label `AUTO-ACK DEFERRED`:
+
+      ## AUTO-ACK DEFERRED — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
+
+      ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+      ~~~
+      Dispatch {{ dispatch_id }} intent NOT auto-acked.
+
+      Failed gate: <gate name>
+      Reason: <one-line — what the intent said that triggered the fail>
+
+      Manual ack: paste `proceed {{ dispatch_id }}` to the worker tab after
+      confirming the intent is acceptable.
+      ~~~
+      ═══ END COPY ═══
 
 ## Step 5 — All gates passed → auto-ack
 
-Write `intent_acknowledged_utc: <UTC ISO8601 at fire time>` to the dispatch file (atomic write; preserve all other fields).
+Write `intent_acknowledged_utc: <UTC ISO8601 at fire time>` to the dispatch file (atomic write; preserve all other fields). **This file write IS the ack contract** — in `--bg` mode the worker reads `intent_acknowledged_utc` from the dispatch file on its next active turn via the auto-ack-resume guard; no `proceed {{ dispatch_id }}` paste-block is required.
 
-Emit the ack block using the v6.5.3 labeled-copy convention with label `INTENT AUTO-ACK`:
+Ack notification emission is mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":
 
-    ## INTENT AUTO-ACK — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line confirming the file write:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    proceed {{ dispatch_id }}
+      STATE: INTENT-AUTO-ACK dispatch={{ dispatch_id }} intent_acknowledged_utc=<UTC ISO8601 at fire time> gates=all-passed
 
-    Intent for dispatch {{ dispatch_id }} auto-acknowledged after all 4 SAFE_TO_ACK_INTENT
-    gates passed. Worker may resume claim/implement.
+  **DO NOT invoke `claude --resume <worker-session> --print "proceed {{ dispatch_id }}"`** — Claude Code refuses `--resume` on running background agents (per Cron Dispatch-Mode Conventions §`--bg` path). The file write is sufficient. If the worker is idle/supervisor-stopped, operator types `falcon poll` on attach to nudge dispatch-file re-read (per the wake-phrase convention).
 
-    Acknowledged by: --auto-ack cron at <UTC ISO8601>
-    Dispatch file: {{ dispatch_file_path }}
-    ~~~
-    ═══ END COPY ═══
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block with label `INTENT AUTO-ACK` (operator pastes the `proceed` line into the worker tab):
+
+      ## INTENT AUTO-ACK — dispatch {{ dispatch_id }} at <UTC ISO8601 at fire time>
+
+      ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+      ~~~
+      proceed {{ dispatch_id }}
+
+      Intent for dispatch {{ dispatch_id }} auto-acknowledged after all 4 SAFE_TO_ACK_INTENT
+      gates passed. Worker may resume claim/implement.
+
+      Acknowledged by: --auto-ack cron at <UTC ISO8601>
+      Dispatch file: {{ dispatch_file_path }}
+      ~~~
+      ═══ END COPY ═══
 
 Write current intent hash to the snapshot file (so next fire doesn't re-ack the same intent).
 
@@ -1888,6 +1956,7 @@ Capture:
                                    count entries where label == "auto-issued:cron")
 - bead_ids[]                      (for cross-checking gap fingerprints)
 - file_scope                      (for the in-scope check on candidate amendments)
+- worker_dispatch_mode            ("bg" | "via-paste" | "paste" — drives all emission shapes below per "Cron Dispatch-Mode Conventions (v7.0.1)")
 
 If session_status == "complete": self-cancel (Step 6) and exit.
 If implementation_results_hash is null: worker hasn't completed yet; nothing to validate; exit silently.
@@ -1906,23 +1975,29 @@ REFUSE (do NOT auto-issue, do NOT write anything) if any of the following hold:
 - File does not exist → emit refuse-block citing "falcon-autopilot.md not committed; run /falcon create-rules and uncomment safe_to_amend_whitelist items, OR issue amendments manually."
 - File exists but every `# PROJECT —` item under `## 2. SAFE_TO_AMEND whitelist` is commented (minimum-viable mode) → emit refuse-block naming a specific whitelist item the user should uncomment (the most-likely-relevant one based on the project's `.claude/rules/*.md` references). Universal whitelist alone is NOT sufficient for --auto-amend writes; the project must opt in.
 
-Refuse-block uses the v6.5.3 labeled-copy convention with label `AMENDMENT AUTO-ISSUE REFUSED`:
+Refuse-block emission is mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":
 
-    ## AMENDMENT AUTO-ISSUE REFUSED — dispatch {{ dispatch_id }} at <UTC ISO8601>
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    Dispatch {{ dispatch_id }} amendment auto-issuance refused.
+      STATE: AMENDMENT-AUTO-ISSUE-REFUSED dispatch={{ dispatch_id }} reason=<short-code> action=<short-code> manual_alt=steering-side-writeback
 
-    Reason: <one-line — missing file / all PROJECT whitelist items commented>
-    Action: <specific instruction — run /falcon create-rules /
-             uncomment `safe_to_amend_whitelist.<item-name>` in
-             .claude/rules/falcon-autopilot.md>
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block with label `AMENDMENT AUTO-ISSUE REFUSED`:
 
-    Manual amendment alternative: see PROTOCOL.md "## Amendments Workflow"
-    for the steering-side amendment writeback procedure.
-    ~~~
-    ═══ END COPY ═══
+      ## AMENDMENT AUTO-ISSUE REFUSED — dispatch {{ dispatch_id }} at <UTC ISO8601>
+
+      ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+      ~~~
+      Dispatch {{ dispatch_id }} amendment auto-issuance refused.
+
+      Reason: <one-line — missing file / all PROJECT whitelist items commented>
+      Action: <specific instruction — run /falcon create-rules /
+               uncomment `safe_to_amend_whitelist.<item-name>` in
+               .claude/rules/falcon-autopilot.md>
+
+      Manual amendment alternative: see PROTOCOL.md "## Amendments Workflow"
+      for the steering-side amendment writeback procedure.
+      ~~~
+      ═══ END COPY ═══
 
 Update snapshot with outcome: "refused"; exit.
 
@@ -1936,24 +2011,30 @@ HALT auto-issuance. Behavior depends on prior_outcome:
 
 In either case, update snapshot with outcome: "halted"; exit.
 
-`AMENDMENT BUDGET EXHAUSTED` block:
+`AMENDMENT BUDGET EXHAUSTED` notification is mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":
 
-    ## AMENDMENT BUDGET EXHAUSTED — dispatch {{ dispatch_id }} at <UTC ISO8601>
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    Dispatch {{ dispatch_id }} --auto-amend budget exhausted.
+      STATE: AMENDMENT-BUDGET-EXHAUSTED dispatch={{ dispatch_id }} budget_cap=<amendment_budget> auto_issued=<auto_amendment_count> halt=true
 
-    Budget cap:           <amendment_budget>
-    Auto-issued so far:   <auto_amendment_count>
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block:
 
-    --auto-amend cron will stay silent on subsequent fires for this dispatch.
-    --watch cron (if armed) continues reporting state changes normally.
+      ## AMENDMENT BUDGET EXHAUSTED — dispatch {{ dispatch_id }} at <UTC ISO8601>
 
-    Any further gaps will require manual amendment relay via the steering
-    session per PROTOCOL.md "## Amendments Workflow" (Steering side).
-    ~~~
-    ═══ END COPY ═══
+      ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+      ~~~
+      Dispatch {{ dispatch_id }} --auto-amend budget exhausted.
+
+      Budget cap:           <amendment_budget>
+      Auto-issued so far:   <auto_amendment_count>
+
+      --auto-amend cron will stay silent on subsequent fires for this dispatch.
+      --watch cron (if armed) continues reporting state changes normally.
+
+      Any further gaps will require manual amendment relay via the steering
+      session per PROTOCOL.md "## Amendments Workflow" (Steering side).
+      ~~~
+      ═══ END COPY ═══
 
 The `--watch` cron continues unaffected; the `--auto-ack` cron (if armed) also continues. ONLY amendment auto-issuance is halted for this dispatch.
 
@@ -1982,21 +2063,27 @@ For each gap in gap_set, attempt to match against `safe_to_amend_whitelist` (uni
 
 - **No whitelist match:** surface as `AMENDMENT AUTO-ISSUE DEFERRED` block citing "gap not in SAFE_TO_AMEND whitelist; manual amendment may be appropriate." Update snapshot with outcome: "deferred-no-match".
 
-Defer block (label `AMENDMENT AUTO-ISSUE DEFERRED`):
+Defer notification is mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":
 
-    ## AMENDMENT AUTO-ISSUE DEFERRED — dispatch {{ dispatch_id }} at <UTC ISO8601>
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    Dispatch {{ dispatch_id }} gap NOT auto-amended.
+      STATE: AMENDMENT-AUTO-ISSUE-DEFERRED dispatch={{ dispatch_id }} gap=<short-summary> reason=<not-in-whitelist|denylist-match> almost_matched=<name-or-none>
 
-    Gap:    <one-line description of the gap surfaced>
-    Reason: <not in whitelist / matches denylist>
-    Whitelist entry that almost matched: <name or "none">
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block with label `AMENDMENT AUTO-ISSUE DEFERRED`:
 
-    Manual amendment alternative: see PROTOCOL.md "## Amendments Workflow".
-    ~~~
-    ═══ END COPY ═══
+      ## AMENDMENT AUTO-ISSUE DEFERRED — dispatch {{ dispatch_id }} at <UTC ISO8601>
+
+      ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+      ~~~
+      Dispatch {{ dispatch_id }} gap NOT auto-amended.
+
+      Gap:    <one-line description of the gap surfaced>
+      Reason: <not in whitelist / matches denylist>
+      Whitelist entry that almost matched: <name or "none">
+
+      Manual amendment alternative: see PROTOCOL.md "## Amendments Workflow".
+      ~~~
+      ═══ END COPY ═══
 
 ## Step 6 — Auto-issue (when whitelist matches AND budget allows)
 
@@ -2006,24 +2093,30 @@ For each matched amendment (after budget HALT check passed in Step 4 AND whiteli
 2. Set `session_status: amendments_pending` if not already.
 3. Increment `auto_amendment_count` by 1.
 4. Re-check budget: if NEW `auto_amendment_count` would exceed `amendment_budget`, issue THIS amendment but skip the rest of the matched amendments this fire (subsequent fires will hit the Step 4 HALT cleanly).
-5. Emit the auto-issued block using label `AMENDMENT AUTO-ISSUED amend-NN`:
+5. Emit the auto-issued notification per `worker_dispatch_mode`. The amendment-file write IS the contract — the notification informs steering; the worker reads `amendments[]` directly. **In `--bg` mode, DO NOT invoke `claude --resume <worker-session> --print "check amendments {{ dispatch_id }}"`** — Claude Code refuses `--resume` on running background agents. The file write of the amendment entry plus session_status amendments_pending is sufficient; the worker self-polls (or operator nudges via `falcon poll` peek-and-reply).
 
-    ## AMENDMENT AUTO-ISSUED amend-NN — dispatch {{ dispatch_id }} at <UTC ISO8601>
+    - **If `worker_dispatch_mode == "bg"`**: emit a single inline STATE: line:
 
-    ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
-    ~~~
-    check amendments {{ dispatch_id }}
+          STATE: AMENDMENT-AUTO-ISSUED dispatch={{ dispatch_id }} amend_id=amend-NN gap=<short-summary> whitelist=<entry-name> budget=<auto_amendment_count>/<amendment_budget or "unlimited">
 
-    Amendment amend-NN auto-issued by --auto-amend cron.
-    Gap addressed:    <one-line>
-    Whitelist match:  <whitelist entry name>
-    Budget status:    <auto_amendment_count> of <amendment_budget or "unlimited">
+    - **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block (operator pastes `check amendments` into worker tab):
 
-    Dispatch file: {{ dispatch_file_path }}
-    Worker should re-read, find pending amendment, and execute per
-    PROTOCOL.md "## Amendments Workflow" (Worker side).
-    ~~~
-    ═══ END COPY ═══
+          ## AMENDMENT AUTO-ISSUED amend-NN — dispatch {{ dispatch_id }} at <UTC ISO8601>
+
+          ═══ COPY EVERYTHING BETWEEN THE FENCES BELOW ═══
+          ~~~
+          check amendments {{ dispatch_id }}
+
+          Amendment amend-NN auto-issued by --auto-amend cron.
+          Gap addressed:    <one-line>
+          Whitelist match:  <whitelist entry name>
+          Budget status:    <auto_amendment_count> of <amendment_budget or "unlimited">
+
+          Dispatch file: {{ dispatch_file_path }}
+          Worker should re-read, find pending amendment, and execute per
+          PROTOCOL.md "## Amendments Workflow" (Worker side).
+          ~~~
+          ═══ END COPY ═══
 
 Update snapshot with current_gap_hash + outcome: "issued".
 
@@ -2144,6 +2237,9 @@ Capture:
 - session_status        (active | amendments_pending | complete)
 - amendments[]          (full list, with per-entry status)
 - intent_acknowledged_utc (status check only — Phase 2 field)
+- worker_dispatch_mode  ("bg" | "via-paste" | "paste" — see defensive check below per "Cron Dispatch-Mode Conventions (v7.0.1)")
+
+**Defensive mode check (v7.0.1)**: if `worker_dispatch_mode == "bg"`, this cron should never have been armed — `--worker-cron` is a no-op in `--bg` mode (the auto-ack-resume guard handles amendment pickup within the persistent background session per PROTOCOL.md `### --bg dispatch mode`). If somehow armed (e.g. operator manually ran the setup paste-block inside a `--bg` worker), self-cancel via Step 5 and exit. This cron only operates in `--via-paste` / `--paste` modes.
 
 If session_status == "complete": self-cancel (Step 5 below) and exit. Steering
 has released the lock; the worker's work for this dispatch is done.
@@ -2338,6 +2434,7 @@ Capture:
 - session_status      (active | amendments_pending | complete)
 - release_on_merge    (should be true; if false, exit silently as a sanity check)
 - branch              (target for gh pr view)
+- worker_dispatch_mode ("bg" | "via-paste" | "paste" — drives all emission shapes below per "Cron Dispatch-Mode Conventions (v7.0.1)")
 
 If session_status == "complete": self-cancel (Step 5 below) and exit.
 If release_on_merge != true: exit silently (operator error; cron should not have been armed).
@@ -2362,12 +2459,24 @@ If pr_state == prior_pr_state: state unchanged; exit silently. (Avoid emitting o
 
 State transitions of interest:
 
-- **null → DRAFT/OPEN**: emit `MERGE-WATCH PR-DETECTED` block citing pr_number + state. The cron continues running; will trigger on MERGED.
-- **DRAFT/OPEN → MERGED**: this is the trigger. Atomically set `session_status: complete` on the dispatch file (preserve all other fields). Emit `MERGE-DETECTED` block citing the merge commit + pr_number. The cron stays armed until next fire when Step 1 detects session_status: complete and self-cancels.
-- **DRAFT/OPEN → CLOSED (not merged)**: emit `MERGE-CRON PR-CLOSED-UNMERGED` block. DO NOT set session_status: complete (the work was abandoned, not released). Steering must decide manually whether to release the lock via /falcon release.
-- **DRAFT → OPEN**: emit `MERGE-WATCH PR-READY` block (informational). No state change.
+- **null → DRAFT/OPEN**: emit `MERGE-WATCH PR-DETECTED` notification citing pr_number + state. The cron continues running; will trigger on MERGED.
+- **DRAFT/OPEN → MERGED**: this is the trigger. Atomically set `session_status: complete` on the dispatch file (preserve all other fields). Emit `MERGE-DETECTED` notification citing the merge commit + pr_number. The cron stays armed until next fire when Step 1 detects session_status: complete and self-cancels.
+- **DRAFT/OPEN → CLOSED (not merged)**: emit `MERGE-CRON PR-CLOSED-UNMERGED` notification. DO NOT set session_status: complete (the work was abandoned, not released). Steering must decide manually whether to release the lock via /falcon release.
+- **DRAFT → OPEN**: emit `MERGE-WATCH PR-READY` notification (informational). No state change.
 
-`MERGE-DETECTED` block (the load-bearing emission — this is the one that triggers the chain):
+**All four emissions are mode-conditional per "Cron Dispatch-Mode Conventions (v7.0.1)":**
+
+- **If `worker_dispatch_mode == "bg"`**: emit a single inline `STATE:` line per transition (no fence):
+
+      STATE: MERGE-DETECTED dispatch={{ dispatch_id }} branch={{ branch_name }} pr=<pr_number> merge_sha=<sha>
+      STATE: MERGE-WATCH-PR-DETECTED dispatch={{ dispatch_id }} pr=<pr_number> state=<DRAFT|OPEN>
+      STATE: MERGE-CRON-PR-CLOSED-UNMERGED dispatch={{ dispatch_id }} pr=<pr_number> manual_release=required
+      STATE: MERGE-WATCH-PR-READY dispatch={{ dispatch_id }} pr=<pr_number>
+      STATE: MERGE-CRON-NO-PR dispatch={{ dispatch_id }} branch={{ branch_name }}
+
+- **If `worker_dispatch_mode == "via-paste"` or `"paste"`**: emit the labeled-copy block. The `MERGE-DETECTED` (load-bearing) block format is shown below as the canonical example; the other transitions use analogous block shapes (labels: `MERGE-WATCH PR-DETECTED`, `MERGE-CRON PR-CLOSED-UNMERGED`, `MERGE-WATCH PR-READY`, `MERGE-CRON NO-PR`).
+
+`MERGE-DETECTED` block (the load-bearing emission — `--via-paste`/`--paste` mode):
 
     ## MERGE-DETECTED — dispatch {{ dispatch_id }} at <UTC ISO8601>
 

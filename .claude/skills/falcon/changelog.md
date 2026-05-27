@@ -4,16 +4,30 @@ Version history for the falcon skill. Current version is in `SKILL.md` frontmatt
 
 ## 7.0.1 (2026-05-27)
 
-**Detection-authority caveats: `claude --help` does NOT list `--bg`; falcon must not probe it.** Adopters and AI assistants doing falcon-related work were repeatedly mis-identifying `--bg` as unsupported by probing `claude --help | grep -- --bg` (empty result despite the flag being supported on Claude Code ≥ 2.1.139). Falcon's own detection logic was already correct (version gate via `claude --version`, never `--help`) — but the docs didn't pre-empt the natural fallback of consulting `--help`. This version adds explicit "Detection authority — do NOT consult `claude --help`" caveats in PROTOCOL.md, COMMANDS.md, and README.md `Verify the install` so AI assistants reading falcon docs don't fall through to a `--help` probe.
+Bundled v7.0.x operational retro pass — multiple targeted fixes landed on the same release branch.
 
-**Docs updated:**
+### Detection-authority caveats: `claude --help` does NOT list `--bg`; falcon must not probe it (fdev-uwx)
+
+Adopters and AI assistants doing falcon-related work were repeatedly mis-identifying `--bg` as unsupported by probing `claude --help | grep -- --bg` (empty result despite the flag being supported on Claude Code ≥ 2.1.139). Falcon's own detection logic was already correct (version gate via `claude --version`, never `--help`) — but the docs didn't pre-empt the natural fallback of consulting `--help`. This version adds explicit "Detection authority — do NOT consult `claude --help`" caveats in PROTOCOL.md, COMMANDS.md, and README.md `Verify the install` so AI assistants reading falcon docs don't fall through to a `--help` probe.
 
 - `PROTOCOL.md` Step 2 §"Mode selection + detection" version-gate step — appended "Detection authority — do NOT consult `claude --help`" paragraph with rationale
 - `COMMANDS.md` `--bg ✓` detection sequence step 1 — appended short caveat with link back to PROTOCOL
 - `README.md` §"Verify the install" — adopter-facing heads-up that `claude --help` may not list `--bg`
 - `SKILL.md` frontmatter — `version: 7.0.0` → `7.0.1`
 
-No protocol-breaking changes; no behavior changes; pure docs/prompt additions.
+### Cron emission dispatch-mode split: `--bg` uses inline `STATE:` lines; `--via-paste` keeps fences (fdev-lbq.9 + fdev-lbq.19)
+
+Production retro observation: in `--bg` mode, autopilot crons were emitting 20-30 line labeled-copy fences (intended for paste into a worker tab) AND an AI assistant was improvising `claude --resume <worker-session> --print "proceed <id>"` to "relay" the fence — only to be rejected by Claude Code with `Error: Session <uuid> is currently running as a background agent (bg). Use claude agents to find and attach to it, or add --fork-session to branch off a copy.` Both are vestigial paste-mode behaviors that don't fit `--bg` semantics (no worker tab to paste into; no peer-to-peer message-injection primitive for running `--bg` agents).
+
+This release adds explicit `Cron Dispatch-Mode Conventions (v7.0.1)` to REFERENCE.md establishing the dual-path contract, then applies mode-conditional emission across all five autopilot cron templates:
+
+- **`--watch`**, **`--auto-ack`**, **`--auto-amend`**, **`--release-on-merge`** templates now branch on `worker_dispatch_mode` at the emission step. In `--bg`: emit a single inline `STATE:` line; the file write of `intent_acknowledged_utc` / `amendments[].request` / `session_status: complete` is the contract; the worker self-polls via auto-ack-resume guard. In `--via-paste` / `--paste`: emit the full labeled-copy fence (unchanged).
+- **`--worker-cron`** template carries a defensive check that self-cancels if armed in `--bg` mode (it should never be — `--bg` suppresses it at emission time, but the defensive check catches operator missteps).
+- Explicit anti-pattern callouts in the conventions section: cron MUST NOT invoke `claude --resume` (Claude Code rejects on running `--bg` sessions) or `claude --fork-session` (creates duplicate session that violates falcon's single-worker-per-dispatch invariant).
+- PROTOCOL.md `### --bg dispatch mode` — added "Cron emission dispatch-mode split (v7.0.1)" subsection summarizing the contract and cross-referencing the REFERENCE.md conventions.
+- COMMANDS.md `### --autopilot ✓` — added v7.0.1 note summarizing the dual-path emission.
+
+No protocol-breaking changes for paste-mode operators. `--bg` operators see significantly less cron noise per fire (single line vs full fence) and no more `--resume` rejection errors in steering output.
 
 ## 7.0.0 (2026-05-26)
 
