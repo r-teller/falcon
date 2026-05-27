@@ -267,6 +267,8 @@ The STATUS UPDATE / `STATE: WATCH-STATUS-UPDATE` emission reports both counts. A
 
 **Worker contract**: per Worker Lifecycle Step 8, every commit MUST include `Closes: <bead-id>` in the message. In single-dispatch mode this was best-practice; in parallel-dispatch mode it's a CORRECTNESS requirement — without the trailer, the watch cron cannot attribute the commit and falls through to the degraded notification on first observation. Amend/rebase that drops the trailer triggers a one-time degraded notification per fire; subsequent fires stay quiet.
 
+**Adaptive cadence (v7.0.1, fdev-lbq.2):** the `--watch` cron does NOT have a per-fire adaptive guard — it's report-only and the file-read it does is already cheap. The other write-bearing crons (`--auto-ack`, `--auto-amend`) DO have a "Step 0 — Adaptive cadence early-exit guard" that short-circuits at minimum token cost when there's no work to do this fire (pre-window or post-window state). See REFERENCE.md cron templates for the exact guards.
+
 ### --auto-ack mode (autopilot intent acknowledgement, v6.9.0)
 
 When `--auto-ack` is set, after Step 1c (lock-registry check) and Step 2 (dispatch file write), steering arms a steering-side cron via `CronCreate` that evaluates the `SAFE_TO_ACK_INTENT` 4-gate predicate against the worker's intent paragraph on each fire. When all gates pass, the cron writes `intent_acknowledged_utc` to the dispatch file and emits the `proceed <dispatch-id>` block inline. When any gate fails, the cron defers silently with one inline note (per intent) explaining which gate failed and how to manually ack.

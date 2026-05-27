@@ -41,6 +41,26 @@ Watch cron now computes per-dispatch attribution via the `Closes: <bead-id>` com
 
 Worker-side contract reinforced: every commit MUST carry `Closes: <bead-id>` in the message. In single-dispatch mode this was best-practice; in parallel-dispatch mode it's now a correctness requirement. Workers already follow this convention per Worker Lifecycle Step 8; this release makes the watch-cron-side consumption explicit.
 
+### Adaptive cadence: per-fire cost short-circuits outside the relevance window (fdev-lbq.2 + fdev-lbq.3)
+
+Production retro: autopilot crons fire on fixed cadences (4m ack / 7m amend) for the entire dispatch lifecycle (~30-60 min), but each cron's relevance window is narrow — `--auto-ack` matters only intent-emission-to-ack (typically 5-20 min); `--auto-amend` matters only completion-to-validated (typically 1-3 fires after the worker emits COMPLETION). Outside these windows the existing in-template early-exits did fire, but each fire still read the full dispatch state before short-circuiting. Operator observation: "auto-ack fired 18 times, 17 silent exits, 1 useful = 5% signal density."
+
+Both write-bearing crons now have a **Step 0 — Adaptive cadence early-exit guard** at the top of their templates that probes ONLY the state-driving fields via a focused yq query (not a full file read), and exits silently when the cron is in a quiescent window. The cadence itself is unchanged (still 5m default); per-fire token cost is what becomes adaptive.
+
+**`--auto-ack` Step 0 quiescent windows:**
+
+- **Pre-intent**: implementation_intent is null → Step 1's existing null-check catches this; minimal additional cost.
+- **Post-ack**: `intent_acknowledged_utc` is non-null AND not terminal → Step 0 case 2 exits immediately.
+- **Terminal**: session_status == "complete" → Step 0 case 1 routes to Step 6 self-cancel.
+
+**`--auto-amend` Step 0 quiescent windows:**
+
+- **Pre-completion**: `implementation_results_hash` is null → Step 0 case 2 exits immediately.
+- **Budget-exhausted**: `auto_amendments_issued >= amendment_budget` → Step 0 case 3 exits immediately (the FIRST HALT detection still flows through Step 4 to emit AMENDMENT BUDGET EXHAUSTED; subsequent fires stay silent).
+- **Terminal**: session_status == "complete" → Step 0 case 1 routes to Step 7 self-cancel.
+
+CronCreate-driven cadence-change (re-arming at a slower cadence on state transition) was considered but deferred to v7.1 — the in-prompt Step 0 guard is the minimum-risk fix that captures most of the noise reduction without touching CronCreate semantics. PROTOCOL.md `### --watch mode` documents the dual-guard pattern; `### --auto-ack mode` and `### --auto-amend mode` cross-reference the REFERENCE.md Step 0 templates.
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:

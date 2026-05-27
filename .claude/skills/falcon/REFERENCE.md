@@ -1753,6 +1753,51 @@ NOT issue amendments, does NOT release the lock, does NOT modify any bd state,
 and does NOT touch any file other than the dispatch file + this cron's sidecar
 snapshot.
 
+## Step 0 — Adaptive cadence early-exit guard (v7.0.1, fdev-lbq.2)
+
+Before reading full dispatch state in Step 1, run a MINIMAL state probe to
+detect whether this cron has anything to do this fire. The `--auto-ack` cron
+is relevant ONLY in the narrow intent-emission-to-ack window; outside that
+window (pre-intent or post-ack), every fire is silent overhead. This guard
+reduces per-fire token cost to a single yq query when there's nothing to do.
+
+Read ONLY the following fields from the dispatch file via a focused yq query
+(avoid the full Step 1 capture):
+
+```
+session_status=$(yq '.session_status' {{ dispatch_file_path }})
+intent_acked=$(yq '.intent_acknowledged_utc' {{ dispatch_file_path }})
+```
+
+Decision tree:
+
+1. **Terminal-state exit**: if `session_status == "complete"`, proceed to Step 6
+   (self-cancel + exit). Skip Step 1; the cron is on its way out.
+2. **Post-ack quiescence**: if `intent_acked` is non-null AND `session_status
+   != "complete"`, the ack already landed (by prior fire or by user); this
+   cron has nothing to do. Exit silently — do NOT write to snapshot; do NOT
+   execute Step 1.
+3. **Active window**: if `intent_acked` is null AND `session_status !=
+   "complete"`, there may be work to do this fire. Proceed to Step 1 for
+   full state read + gate evaluation.
+
+Per-dispatch behavioral envelope:
+
+- **Pre-intent** (worker hasn't emitted yet): every fire exits at Step 0
+  case 3-but-then-pre-intent-check-in-Step-1 — low cost (just file reads,
+  no gate eval).
+- **Intent-emission-to-ack window** (typically 5-20 min): fires execute
+  Step 1+ and evaluate gates; at most one fire writes
+  `intent_acknowledged_utc`.
+- **Post-ack** (until terminal): every fire exits at Step 0 case 2 (single
+  yq query, minimum cost).
+- **Terminal**: Step 0 case 1 self-cancels.
+
+The cadence itself stays at default 5m; this guard makes per-fire cost
+adaptive to dispatch phase. CronCreate-driven cadence-change is a possible
+v7.1 enhancement (re-arm at slower cadence post-ack); v7.0.1 ships the
+in-prompt guard because it's the minimum-risk change.
+
 ## Step 1 — Read current state
 
 Read the dispatch file: {{ dispatch_file_path }}
@@ -1975,6 +2020,65 @@ Mode: AUTONOMOUS AMENDMENT ISSUANCE. This cron may write entries to
 the budget has not been exhausted. It does NOT acknowledge intent, does NOT
 release the lock, does NOT modify any bd state, and does NOT touch any file
 other than the dispatch file + this cron's sidecar snapshot.
+
+## Step 0 — Adaptive cadence early-exit guard (v7.0.1, fdev-lbq.3)
+
+Before reading full dispatch state in Step 1, run a MINIMAL state probe to
+detect whether this cron has anything to do this fire. The `--auto-amend`
+cron is relevant ONLY in the completion-to-validated window; outside that
+window (pre-completion, budget-exhausted, or terminal), every fire is silent
+overhead. This guard reduces per-fire token cost to a single yq query when
+there's nothing to do.
+
+Read ONLY the following fields from the dispatch file via a focused yq query
+(avoid the full Step 1 capture):
+
+```
+session_status=$(yq '.session_status' {{ dispatch_file_path }})
+impl_results_hash=$(yq '.implementation_results_hash' {{ dispatch_file_path }})
+amend_budget=$(yq '.amendment_budget' {{ dispatch_file_path }})
+auto_amend_count=$(yq '.auto_amendments_issued // 0' {{ dispatch_file_path }})
+```
+
+Decision tree (three quiescent windows):
+
+1. **Terminal-state exit**: if `session_status == "complete"`, proceed to
+   Step 7 (self-cancel + exit). Skip Step 1.
+2. **Pre-completion quiescence**: if `impl_results_hash` is null AND
+   `session_status != "complete"`, worker hasn't emitted COMPLETION yet;
+   no validation gaps to find. Exit silently. Skip Step 1.
+3. **Budget-exhausted quiescence**: if `amend_budget` is non-null AND
+   `auto_amend_count >= amend_budget`, the HALT was already detected and
+   emitted on a prior fire (Step 4). This cron has no further amendments
+   to issue for this dispatch. Exit silently. Skip Step 1. (The FIRST
+   detection of HALT — when `auto_amend_count` first reaches the budget —
+   still flows through Step 4 to emit the AMENDMENT BUDGET EXHAUSTED
+   notification; subsequent fires hit this Step 0 guard and stay silent.)
+4. **Active window**: if `impl_results_hash` is non-null AND
+   `session_status != "complete"` AND budget is not exhausted, there may
+   be gaps to evaluate. Proceed to Step 1 for the full state read.
+
+Per-dispatch behavioral envelope:
+
+- **Pre-completion** (worker hasn't emitted COMPLETION yet): every fire
+  exits at Step 0 case 2 (minimum cost).
+- **Active window** (completion → validated/released, typically 1-3 fires):
+  fires execute Step 1+ and evaluate gaps against the SAFE_TO_AMEND
+  whitelist.
+- **Budget-exhausted** (after HALT fires once at Step 4): every subsequent
+  fire exits at Step 0 case 3 (minimum cost) until terminal.
+- **Post-validated, no-gaps** (gap_set has been empty for multiple fires):
+  Step 1's existing "gap_set is empty" early-exit in Step 5 still applies.
+  Step 0 doesn't catch this case (would require reading gap state, which
+  is the expensive part of Step 1). Acceptable — the post-validated cost-
+  per-fire is already low after Step 5's `current_gap_hash == prior_gap_hash`
+  silent-exit check.
+- **Terminal**: Step 0 case 1 self-cancels.
+
+The cadence itself stays at default 5m; this guard makes per-fire cost
+adaptive to dispatch phase. CronCreate-driven cadence-change is a possible
+v7.1 enhancement; v7.0.1 ships the in-prompt guard because it's the
+minimum-risk change.
 
 ## Step 1 — Read current state
 
