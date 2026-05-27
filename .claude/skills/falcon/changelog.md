@@ -33,6 +33,37 @@ When all three are live, autopilot crons should land on signal-density > 30% acr
 
 **SKILL.md version bumped:** 7.0.1 → 7.1.0 (MINOR — new feature, backwards-compatible; v7.0.x dispatches without Effort Forecast still work via the fallback path).
 
+**Per-phase cron cadence re-arming — LIVE (fdev-lbq.29 implements fdev-lbq.27 spec).** Builds on the forecast-driven initial cadence above. Step 4 of the dispatch protocol now invokes the Phase Transition Handler before auto-release. The handler computes current_phase from existing dispatch-file fields, compares to phase_transitions[].last, and on transition re-arms each cron via CronDelete-then-CronCreate at the phase-appropriate cadence.
+
+Per-phase × per-cron multiplier table (multipliers stack on .28's bucket):
+
+  phase            --auto-ack  --auto-amend  --watch
+  pre_intent       × 2         × 2           × 1
+  intent_confirm   × 0.5       × 2           × 1
+  implementation   CronDelete  × 2           × 1
+  verify_amendment skipped     × 0.5         × 1
+  post_validated   self-cancel self-cancel   self-cancel
+
+**Discover-phase resolutions (fdev-lbq.29):**
+
+- **Auto-ack self-cancel ownership in `implementation` phase**: ACTIVE CronDelete by the Phase Transition Handler. Step 0 adaptive-cadence guard from fdev-lbq.2 remains in the auto-ack template as redundant safety but is no longer the canonical owner of the transition.
+- **verify_amendment auto-ack "(quiescent)" path**: handler checks `<cron>_cron_id` field at the top of each per-cron loop iteration; if null (already self-cancelled), skip entirely with `{cron: "autoack", skipped: true}` in cron_re_arms[]. No CronDelete attempt, no CronCreate, no error.
+- **Atomic-write ordering vs partial CronCreate failures**: handler collects ALL per-cron outcomes in memory FIRST (CronDelete + CronCreate results, including failure captures), then writes the dispatch file ONCE — both cron_id field updates AND the new phase_transitions[] entry — in a single atomic write. Each cron's outcome (re-armed / self-cancelled / no-op / skipped / failed) is captured in cron_re_arms[] regardless of success.
+
+**Watch-cron no-op optimization**: when new_cadence == current_cadence (most commonly the watch cron at × 1 across non-terminal phases), the handler skips CronDelete/CronCreate for that cron. Forensic record still appears in cron_re_arms[] as `{cron: "watch", no_op: true, ...}` for audit-trail completeness.
+
+**Known limitation: non-Step-4 invocations miss transitions.** If steering is invoked mid-dispatch without reaching Step 4 (e.g., `/falcon status` or `/falcon list-locks`), the handler does NOT auto-fire. Cron cadences stay at their last-armed value until the next Step 4 invocation. The `/falcon transition <dispatch-id>` operator command (pending in fdev-lbq.31) fills this gap as a deliberate manual-invocation path.
+
+**Composition with v7.0.1 + v7.1.0 other cadence work:**
+
+The cron cadence model now has THREE LIVE mechanisms operating at different scales:
+
+1. **Per-fire Step 0 adaptive guards (v7.0.1, fdev-lbq.2/.3)** — short-circuits when state hasn't shifted. Token cost is what adapts.
+2. **Forecast-driven initial cadence (v7.1.0, fdev-lbq.28)** — picks the initial bucket at CronCreate time.
+3. **Per-phase cadence re-arming (v7.1.0, fdev-lbq.29)** — shifts cadence as the dispatch progresses through phases. Re-arms via CronCreate on transition.
+
+When fdev-lbq.30 (cron telemetry impl) ships, /falcon retro will emit signal-density numbers per cron to empirically validate the multiplier table. Target: signal-density > 30% across the dispatch lifetime.
+
 ## 7.0.1 (2026-05-27)
 
 Bundled v7.0.x operational retro pass — multiple targeted fixes landed on the same release branch.

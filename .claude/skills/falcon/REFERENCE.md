@@ -192,7 +192,7 @@ merge_cron_id: null   # CronCreate-returned ID for the merge-poll cron (v6.12.0+
                       # and the cache-miss is amortized over the longer wait). Same
                       # prefix-match teardown via /falcon release-cron.
 
-phase_transitions: []   # v7.1 SPEC (impl deferred, fdev-lbq.27).
+phase_transitions: []   # v7.1.0 LIVE (fdev-lbq.29 implements fdev-lbq.27 spec).
                         # Forensic record of dispatch lifecycle phase transitions.
                         # Each entry is appended by the Phase Transition Handler
                         # (PROTOCOL.md `### Phase Transition Handler (v7.1)`) when
@@ -215,6 +215,16 @@ phase_transitions: []   # v7.1 SPEC (impl deferred, fdev-lbq.27).
                         # implementation_results_hash / session_status. See
                         # PROTOCOL.md `### Mode selection + detection` §"Dispatch
                         # lifecycle phases" for the derivation rule.
+                        #
+                        # v7.1.0 cron_re_arms[] entry shapes:
+                        #   - Re-armed:   { cron, old_id, new_id, old_cadence_m, new_cadence_m }
+                        #   - Self-cancel: { cron, self_cancelled: true, old_id, old_cadence_m }
+                        #   - No-op:      { cron, no_op: true, old_cadence_m, new_cadence_m }
+                        #                 (new == old; handler skipped CronDelete/CronCreate)
+                        #   - Skipped:    { cron, skipped: true, reason: "not armed" }
+                        #                 (cron_id was null on the dispatch file; nothing to manage)
+                        #   - Failed:     { cron, error: "create_failed" | "delete_failed", details }
+                        #                 (graceful degrade; <cron>_cron_id unchanged)
 
 cron_telemetry: {}   # v7.0.1 SPEC (impl deferred to v7.1, fdev-lbq.6).
                      # Each cron template will increment its own counters here on fire-entry,
@@ -1634,7 +1644,7 @@ Falcon's v7.0.1 + v7.1 cron cadence model has TWO orthogonal adaptation mechanis
 
 1. **Per-fire Step 0 adaptive cadence guards (v7.0.1, fdev-lbq.2 + fdev-lbq.3)**: each `--auto-ack` and `--auto-amend` cron template carries a Step 0 early-exit guard that probes the dispatch file's state-driving fields via a minimal yq query and exits silently when there's nothing to do. **Token cost** is what adapts (the cadence itself stays fixed at the CronCreate-assigned schedule). Implemented in v7.0.1.
 
-2. **Per-phase cadence re-arming via CronCreate (v7.1 spec, fdev-lbq.27; impl deferred per fdev-lbq.29)**: steering observes dispatch lifecycle phase (computed from existing fields per PROTOCOL.md `### Mode selection + detection` §"Dispatch lifecycle phases") and on each phase transition, performs CronDelete-then-CronCreate to RE-ARM each cron at the phase-appropriate cadence. **The cadence itself** is what adapts (Step 0 still fires per the same CronCreate-assigned schedule, just at a different schedule across phases). Spec landed in v7.0.1; implementation pending in fdev-lbq.29.
+2. **Per-phase cadence re-arming via CronCreate (v7.1.0 LIVE, fdev-lbq.29 implements fdev-lbq.27 spec)**: steering observes dispatch lifecycle phase (computed from existing fields per PROTOCOL.md `### Mode selection + detection` §"Dispatch lifecycle phases") and on each phase transition, performs CronDelete-then-CronCreate to RE-ARM each cron at the phase-appropriate cadence. **The cadence itself** is what adapts (Step 0 still fires per the same CronCreate-assigned schedule, just at a different schedule across phases). Handler runs at Step 4 before auto-release; the `/falcon transition <dispatch-id>` operator command (fdev-lbq.31 pending) fills the non-Step-4 invocation gap. Watch-cron no-op optimization skips CronDelete/CronCreate when new_cadence == current_cadence (still records forensic entry in cron_re_arms[]).
 
 3. **Forecast-driven initial cadence (v7.1.0 LIVE, fdev-lbq.28 implements fdev-lbq.25 spec)**: at dispatch-time Step 2, steering parses the bead's Effort Forecast Total turns + Confidence and selects a bucket (short/medium/long) for each cron's initial CronCreate cadence. See PROTOCOL.md `### Mode selection + detection` §"Forecast-driven initial cadence" for the bucket table and parser pseudocode.
 

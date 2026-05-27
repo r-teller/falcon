@@ -345,9 +345,17 @@ The computed `(ack_m, amend_m, watch_m)` tuple feeds into each CronCreate call's
 
 **v7.1.0 ships the impl** (fdev-lbq.28 closed). v7.0.1 shipped only the SPEC + bucket table because the in-prompt Step 0 adaptive-cadence guards (fdev-lbq.2/.3) already reduce per-fire cost in quiescent windows. The v7.1.0 impl extends that with dispatch-time cadence bucketing — short beads get tighter cadences (2m/4m/6m), long beads get relaxed (8m/14m/22m), missing-forecast falls back to medium default.
 
-### Phase Transition Handler (v7.1 spec; impl deferred, fdev-lbq.27)
+### Phase Transition Handler (v7.1.0 LIVE, fdev-lbq.29 implements fdev-lbq.27 spec)
 
-Builds on the bucket table above. Where fdev-lbq.25's bucket sets the INITIAL cadence at dispatch start, this handler detects phase transitions during the dispatch lifecycle and RE-ARMS each cron at the phase-appropriate cadence. Each phase × cron-type pair has a multiplier applied to the bucket cadence.
+Builds on the bucket table above. Where fdev-lbq.28 sets the INITIAL cadence at dispatch start, this handler detects phase transitions during the dispatch lifecycle and RE-ARMS each cron at the phase-appropriate cadence. Each phase × cron-type pair has a multiplier applied to the bucket cadence.
+
+**Discover-phase resolutions (from fdev-lbq.29 impl):**
+
+- **Auto-ack self-cancel ownership in `implementation` phase**: ACTIVE CronDelete on the transition. The handler explicitly `CronDelete`s the auto-ack cron when entering `implementation` and records `{cron: "autoack", self_cancelled: true}` in phase_transitions[].cron_re_arms[]. The Step 0 adaptive-cadence guard (fdev-lbq.2) remains in the auto-ack template as redundant safety, but the canonical owner of the self-cancel transition is this handler.
+
+- **verify_amendment auto-ack "(quiescent)" code path**: by the time the dispatch reaches `verify_amendment`, the auto-ack cron was already CronDeleted in the implementation-phase transition above; its `autoack_cron_id` field on the dispatch file is null. The handler checks each cron's `<cron>_cron_id` field at the top of the per-cron loop; if null, the cron is skipped entirely with `{cron: "autoack", skipped: true, reason: "not armed"}` recorded in cron_re_arms[]. No CronDelete attempt, no CronCreate, no error.
+
+- **Atomic-write ordering vs partial failures**: the handler collects ALL per-cron outcomes (CronDelete attempted; CronCreate attempted with success/failure) in memory FIRST, then writes the dispatch file ONCE — both the `<cron>_cron_id` field updates AND the new `phase_transitions[]` entry — in a single atomic write. Never partial-state on disk. Each cron's outcome is captured in cron_re_arms[] regardless of success or failure (`error: "create_failed"` for graceful-degrade cases).
 
 **Per-phase cadence multiplier table:**
 
@@ -398,7 +406,11 @@ Multipliers stack on top of fdev-lbq.25's bucket cadence: `effective_cadence = b
 - **Multiple transitions within one cycle** (e.g., worker emits intent and gets acked within 30s, before steering's next invocation): later-transition-wins. The handler computes current_phase fresh on each invocation; only ONE re-arm executes per cron per steering invocation regardless of how many intermediate phases were technically crossed.
 - **`current_phase` regression** (theoretically impossible since detection is forward-only on existing fields): if observed, log a warning, take no action, and surface the dispatch file state inline for investigation.
 
-**Where this handler runs in Step 4:** Step 4 (Stash for Wrapup + Auto-Release) runs the handler AFTER the safe-to-release check but BEFORE the auto-release path itself. Rationale: a successful auto-release triggers the `post_validated` transition which self-cancels all crons; running the handler first catches the transition + re-arms (or self-cancels) cleanly. If steering is invoked mid-dispatch without a release (operator just running `/falcon status` or similar), Step 4 is skipped but the handler can be invoked directly via `/falcon transition <dispatch-id>` (operator command, also v7.1 spec).
+**Where this handler runs in Step 4:** Step 4 (Stash for Wrapup + Auto-Release) runs the handler AFTER the safe-to-release check but BEFORE the auto-release path itself. Rationale: a successful auto-release triggers the `post_validated` transition which self-cancels all crons; running the handler first catches the transition + re-arms (or self-cancels) cleanly.
+
+**Known limitation: non-Step-4 invocations miss transitions.** If steering is invoked mid-dispatch without reaching Step 4 (e.g., operator runs `/falcon status` or `/falcon list-locks`), the handler does NOT auto-fire. Cron cadences stay at their last-armed value until the next Step 4 invocation. The `/falcon transition <dispatch-id>` operator command (per fdev-lbq.31) fills this gap as a deliberate manual-invocation path. Auto-invocation on every steering command is out-of-scope (would couple every read-only command to a potential dispatch-file write).
+
+**Watch-cron no-op optimization (fdev-lbq.29 R4):** when `new_cadence == current_cadence` for a cron (most commonly the `--watch` cron at × 1 across all non-terminal phases), the handler SKIPS the CronDelete/CronCreate for that cron. Forensic record still appears in `cron_re_arms[]` as `{cron: "watch", no_op: true, old_cadence_m: N, new_cadence_m: N}` so the audit trail shows the handler considered the cron at the transition.
 
 **Cross-references:**
 - Bucket cadences: `### Mode selection + detection` (above) §Forecast-driven initial cadence
@@ -426,7 +438,7 @@ The cron self-cancels on terminal state (`session_status: complete`). Manual tea
 
 **Worker-side complement (see Worker Lifecycle Step 3 below):** the worker checks `intent_acknowledged_utc` on each resume prompt. If non-null AND no commits have landed yet, the worker skips the intent-confirm pause and proceeds straight to claim — eliminating the double-prompt that would otherwise occur if the worker session restarts after the cron already acked.
 
-**Phase-active windows (v7.1 spec; impl deferred, fdev-lbq.27):** `--auto-ack` peaks at fast cadence (× 0.5 bucket) in the `intent_confirm` phase; is slow (× 2) in `pre_intent`; and self-cancels once it transitions to `implementation` (intent_acknowledged_utc is non-null; Step 0 guard already short-circuits, but the per-phase handler can also CronDelete it entirely). See `### Phase Transition Handler (v7.1)` for the multiplier table and re-arm sequence.
+**Phase-active windows (v7.1.0 LIVE, fdev-lbq.29):** `--auto-ack` peaks at fast cadence (× 0.5 bucket) in the `intent_confirm` phase; is slow (× 2) in `pre_intent`; and ACTIVELY self-cancels (CronDelete by the Phase Transition Handler) when transitioning to `implementation` (intent_acknowledged_utc is non-null). The Step 0 adaptive-cadence guard remains as redundant safety, but the canonical owner of the self-cancel transition is the Phase Transition Handler. See `### Phase Transition Handler (v7.1.0 LIVE)` for the multiplier table and re-arm sequence.
 
 ### --auto-amend mode + --amendment-budget HALT (v6.10.0)
 
@@ -452,7 +464,7 @@ This is the THIRD entry in the cron prompt template registry (after `--watch` fr
 
 **Triple-cron coordination:** when `--watch --auto-ack --auto-amend` are all armed, three separate crons run side-by-side with independent slugs and sidecars. They do not coordinate; the `--watch` cron observes state changes that the other two crons cause. The prefix-match teardown convention handles all three together via `/falcon release-cron`.
 
-**Phase-active windows (v7.1 spec; impl deferred, fdev-lbq.27):** `--auto-amend` peaks at fast cadence (× 0.5 bucket) in the `verify_amendment` phase (completion emitted → released); is slow (× 2) in `pre_intent` / `intent_confirm` / `implementation` (no completion yet); and self-cancels in `post_validated`. The amendment-budget HALT path is orthogonal to the phase-active cadence — when the budget exhausts, the cron stays at the verify_amendment cadence but Step 0 / Step 4 guards suppress further amendment issuance. See `### Phase Transition Handler (v7.1)` for the multiplier table and re-arm sequence.
+**Phase-active windows (v7.1.0 LIVE, fdev-lbq.29):** `--auto-amend` peaks at fast cadence (× 0.5 bucket) in the `verify_amendment` phase (completion emitted → released); is slow (× 2) in `pre_intent` / `intent_confirm` / `implementation` (no completion yet); and self-cancels in `post_validated`. The amendment-budget HALT path is orthogonal to the phase-active cadence — when the budget exhausts, the cron stays at the verify_amendment cadence but Step 0 / Step 4 guards suppress further amendment issuance. See `### Phase Transition Handler (v7.1.0 LIVE)` for the multiplier table and re-arm sequence.
 
 ### --autopilot mode (full AFK bundle, v6.11.0)
 
@@ -617,7 +629,9 @@ If the file exists, **merge** the new report into the existing arrays — do not
 
 After stash, run `git fetch origin && git log origin/<branch> --oneline -5` so this session has visibility into the remote's commits before the next dispatch.
 
-**Auto-release (default path):** if the safe-to-release predicate holds, release the lock here as part of stash. Glob `.claude/tmp/*.json`, parse each, find entry matching `<dispatch-id>`, remove from `falcon_dispatches[]`, write back. Update the dispatch file `session_status: complete`.
+**Phase Transition Handler invocation (v7.1.0, fdev-lbq.29):** before the auto-release path below, invoke the Phase Transition Handler (per `### Phase Transition Handler (v7.1.0 LIVE)` above) to detect any current_phase change since the prior fire and re-arm crons accordingly. Sequence: compute current_phase → compare to phase_transitions[].last (or null) → if different, run the per-cron re-arm loop → write updated cron_ids + phase_transitions[] entry atomically. Handler is idempotent when current_phase == previous_phase (early exit before the per-cron loop). On any CronCreate failure during re-arm, the handler logs an inline warning and continues with OLD cadence (`<cron>_cron_id` unchanged); never cron-less for a phase requiring polling.
+
+**Auto-release (default path):** if the safe-to-release predicate holds, release the lock here as part of stash. Glob `.claude/tmp/*.json`, parse each, find entry matching `<dispatch-id>`, remove from `falcon_dispatches[]`, write back. Update the dispatch file `session_status: complete`. (NOTE: setting `session_status: complete` here triggers the post_validated phase transition. Since the Phase Transition Handler ran ABOVE this step, it observed the pre-release phase and re-armed accordingly. The post_validated transition self-cancels all crons via the next steering invocation — operators or wrapup running `/falcon status` / `/falcon list-locks` / `/wrapup` after release will trigger the handler one more time to catch the post_validated → all-self-cancel transition. Alternatively, the handler can be invoked synchronously at the end of Step 4 to self-cancel crons immediately on release; v7.1.0 ships the asynchronous-via-next-invocation pattern because it avoids ordering complexity inside Step 4 itself.)
 
 **Agent-viewer row cleanup (v7.0.1, fdev-lbq.18):** after writing `session_status: complete` and clearing the lock registry, the agent-viewer row for the worker session should also be removed (otherwise dead rows accumulate in `claude agents` over multi-dispatch sessions). The right primitive is `claude rm <worker_bg_session_id>` — NOT `claude stop` (which only stops the process; row stays). Ordering is poll-then-rm to avoid losing the worker's final report write:
 
