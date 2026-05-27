@@ -329,7 +329,7 @@ After `/falcon create-rules` + `/falcon enable-autopilot --profile=<name>` (see 
 /falcon work beads <bead-spec> --autopilot --amendment-budget=3
 ```
 
-**Default (`--bg` mode, v7.0.0+):** steering arms three crons in its own session (`watch`, `autoack`, `amend`) and spawns the worker as a Claude Code background session. `--worker-cron` is suppressed (the auto-ack-resume guard handles amendment pickup inside the persistent `--bg` worker). The three steering crons coordinate via atomic writes to the dispatch file.
+**Default (`--bg` mode, v7.0.0+):** steering arms three crons in its own session (`watch`, `autoack`, `amend`) and spawns the worker as a Claude Code background session. `--worker-cron` is suppressed. **As of v7.1.1**, the worker arms its own self-poll cron at intent-emission and DAR pause points (`durable: false`, `CronDelete`s on wait-condition-satisfied) so steering's ack/amendment writes are observed without operator paste relay — full AFK in `--bg` mode no longer requires peek-and-reply at each intent gate. The three steering crons + worker self-poll coordinate via atomic writes to the dispatch file.
 
 **`--via-paste` fallback:** steering emits TWO paste blocks for the worker tab (dispatch prompt + worker-cron setup); once both pastes land, four crons coordinate via atomic writes.
 
