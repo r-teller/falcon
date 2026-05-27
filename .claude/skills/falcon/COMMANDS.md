@@ -155,6 +155,32 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#falcon-release-cron
 
 ---
 
+### `/falcon transition <dispatch-id>` ✓ (v7.1.0, fdev-lbq.31)
+
+Manually invoke the Phase Transition Handler against a dispatch. Fills the known limitation of v7.1.0's per-phase cron cadence re-arming (per fdev-lbq.29): the Handler auto-fires only on Step 4 invocations (during `/falcon release` or auto-release). Operators running `/falcon status`, `/falcon list-locks`, or other read-only commands between Step-4-triggering events would otherwise miss intermediate phase transitions until the next dispatch action — leaving crons running at stale cadences.
+
+**Behavior:**
+
+1. Read the dispatch file at `.claude/tmp/falcon-dispatch-<dispatch-id>.yaml`. Refuse if not found.
+2. Refuse if `session_status: complete` — the dispatch is terminal; no further transitions to detect.
+3. Invoke the Phase Transition Handler (same code path Step 4 uses) — see PROTOCOL.md `### Phase Transition Handler (v7.1.0 LIVE)` §"Re-arm sequence on transition" for the full algorithm.
+4. Report the result inline:
+   - If no transition detected (`current_phase == previous_phase`): `No transition for dispatch <id>. Current phase: <phase>. Cron cadences unchanged.`
+   - If transition detected: `Transition for dispatch <id>: <previous_phase> → <current_phase>. Crons re-armed: <summary from cron_re_arms[]>.`
+5. Idempotent: invoking when no transition exists is a no-op (dispatch file untouched).
+
+**Use when:**
+
+- An operator has been polling a dispatch via `/falcon status` and notices the dispatch should have transitioned phases by now (e.g., worker emitted intent but auto-ack cron is still at its slow pre_intent cadence)
+- Diagnostics: confirm what phase falcon thinks a dispatch is in, without waiting for the next Step 4 invocation
+- Recovery: if a previous Step 4 invocation failed to complete (CronCreate-fail graceful-degrade path left some crons at OLD cadence), a manual `/falcon transition` retry lets steering reattempt the re-arm
+
+**Auto-invocation on `/falcon status` is intentionally OUT of scope** — coupling every read-only command to a potential dispatch-file write would surprise operators (status is documented as read-only) and creates new failure modes during partial writes. The manual invocation here is a deliberate trade-off: operators who want phase reconciliation must ask for it explicitly.
+
+For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-handler-v710-live-fdev-lbq29-implements-fdev-lbq27-spec) `### Phase Transition Handler (v7.1.0 LIVE)`.
+
+---
+
 ### `/falcon respawn-fresh <dispatch-id> [--reason=<reason>] [--force]` ✓
 
 **v7.0.0+ sub-command.** Spawn a FRESH `--bg` worker that continues an existing dispatch where the prior worker died (context exhausted, safety-tripped, stuck/looping, or operator-chosen replacement). The new worker picks up via a three-step recovery sequence that pushes any unpushed commits, closes beads with landed-but-bd-still-open work, and reconciles in-progress amendments — all before resuming normal lifecycle.

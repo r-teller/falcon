@@ -70,6 +70,8 @@ Implementation contract is centralized in REFERENCE.md `### Cron Telemetry Instr
 
 With all three v7.1.0 features now LIVE (fdev-lbq.28 + fdev-lbq.29 + fdev-lbq.30), operators get end-to-end empirical autopilot calibration: forecast picks the initial bucket; per-phase re-arming shifts cadence through the lifecycle; telemetry validates whether the result lands on the > 30% signal-density target.
 
+**`/falcon transition <dispatch-id>` — LIVE (fdev-lbq.31).** Operator command that manually invokes the Phase Transition Handler against a dispatch. Fills the known limitation of fdev-lbq.29's Step-4-only auto-invocation pattern: operators running `/falcon status`, `/falcon list-locks`, or other read-only commands between Step-4-triggering events would otherwise miss intermediate phase transitions. Behavior: read dispatch file → refuse if not found OR `session_status: complete` → invoke the Handler (same code path Step 4 uses) → report inline (`No transition` if idempotent; `Transition: <prev> → <new>; crons re-armed: ...` if transition fired). COMMANDS.md adds the sub-command section; PROTOCOL.md cross-references from the Phase Transition Handler "Known limitation" subsection. Use cases: diagnostics (confirm current_phase), recovery (retry re-arm after a Step-4 graceful-degrade failure), proactive reconciliation during long-poll operator workflows.
+
 ## 7.0.1 (2026-05-27)
 
 Bundled v7.0.x operational retro pass — multiple targeted fixes landed on the same release branch.
