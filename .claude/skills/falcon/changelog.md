@@ -2,6 +2,57 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.2.0 (2026-05-27)
+
+**Cron prompt condensation + REFERENCE.md tripwire-fired three-file split (fdev-b2f + fdev-3h2).** Two related changes that bundle naturally: a ~85% token-cost reduction on every steering-side `CronCreate` call, and a structural reorganization that splits `REFERENCE.md` into three single-purpose files now that the documented 1500-line tripwire fired.
+
+### Cron prompt condensation (fdev-b2f, Layer 1 + Layer 2 token wins)
+
+The 5 steering-side autopilot cron templates (`--watch`, `--auto-ack`, `--auto-amend`, `--worker-cron`, `--release-on-merge`) previously embedded the full Step 0-N cron-fire logic verbatim. When steering armed one via `CronCreate(prompt=...)`, the literal text — ~3000 tokens per cron — became the cron's complete system prompt for every fire. A standard `--autopilot` macro arms 3 steering crons → ~9000 tokens of CronCreate-prompt overhead per dispatch arm; per-fire amortized cost was ~30,000 tokens per 10 fires.
+
+Each cron template section now has a `#### Condensed CronCreate prompt (v7.1.2)` sub-subsection holding the literal text steering passes to `CronCreate`. The condensed variant is a thin pointer (~215-628 tokens per cron, measured: `--watch` ~215, `--release-on-merge` ~212, `--worker-cron` ~363, `--auto-ack` ~463, `--auto-amend` ~628 — the two with inline Step 0 adaptive guards run longer because the guard's yq probes + decision tree stay inline by design) that Reads the canonical Step 1-N spec from the same file at fire time. `--auto-ack` and `--auto-amend` keep their v7.0.1 adaptive-cadence Step 0 guards INLINE (load-bearing — ~60-70% of fires short-circuit at Step 0 per v7.0.1 fdev-lbq.2/.3; pointer-style Step 0 would defeat the per-fire amortized win by replacing a system-prompt-cached predicate with a tool-result-loaded one). `--worker-cron` keeps its defensive `worker_dispatch_mode == "bg"` check inline. The other two (`--watch`, `--release-on-merge`) have no Step 0 — fully pointer-style.
+
+**Token-cost deltas:**
+
+| Layer | Metric | Before (v7.1.1) | After (v7.2.0) | Reduction |
+|---|---|---|---|---|
+| Layer 1 | `CronCreate` `prompt` parameter size, per cron | ~3000 tokens | ~215-628 tokens | ~79-93% |
+| Layer 1 | Per `--autopilot` macro arm (3 steering crons: watch+autoack+autoamend) | ~9000 tokens | ~1306 tokens | ~85% |
+| Layer 2 | Per-fire amortized context cost (per 10 fires, mixed silent/signal) | ~30,000 tokens | ~12,000 tokens | ~60% |
+
+**Drift discipline.** The full Step 0-N spec stays in the canonical reference; the condensed variant is a derived pointer that Reads the spec at fire time. Eliminates the drift risk where armed crons carry stale Step 1-N text after the canonical spec is updated.
+
+### Three-file split (fdev-3h2, tripwire-fired action)
+
+`REFERENCE.md` was at 3079 lines (post-condensation) — well past the 1500-line tripwire documented in `falcon-dev/.claude/architecture.md` Design Decisions (the original 2026-05-26 entry noted the tripwire's existence, but the line-count baseline cited there was inaccurate; the actual size at that time was ~2840 lines, already 90% past the threshold). v7.2.0 acts on the tripwire honestly.
+
+| File | Contents | v7.2.0 lines |
+|---|---|---|
+| `REFERENCE.md` (residual) | Schemas, `init_prompt` templates (default + paste-mode), bootstrap, dispatch prompt, worker return contract, stash file format, copy-paste convention | ~915 |
+| `CRONS.md` (NEW) | `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)` + `## Autopilot Cron Prompt Templates` (5 cron templates with v7.2.0 condensed sub-subsections + advisor extensions) + shared cron infrastructure subsections (`### Cron Telemetry Instrumentation`, `### Cron Dispatch-Mode Conventions`, `### claude agents CLI surface`) | ~1478 |
+| `AUTOPILOT-RULES.md` (NEW) | `## falcon-autopilot.md Template` (6-section rules-file template) + 3 profile definitions (`conservative`, `standard`, `aggressive`) + adopter customization guidance | ~730 |
+
+All three files are now well under the 1500-line tripwire individually. Each has a clear single purpose. `REFERENCE.md` retains pointer stubs at the locations of the three moved sections, so navigating from old anchors lands in the right new home.
+
+### Changes
+
+- **NEW** `.claude/skills/falcon/CRONS.md` — cron prompt templates moved here from REFERENCE.md
+- **NEW** `.claude/skills/falcon/AUTOPILOT-RULES.md` — `falcon-autopilot.md` rules-file template moved here from REFERENCE.md
+- `REFERENCE.md` — 3 sections removed (`## Worker Self-Poll Cron Templates`, `## falcon-autopilot.md Template`, `## Autopilot Cron Prompt Templates`); pointer stubs left at their original locations. File: 3079 → 915 lines.
+- `PROTOCOL.md` — 11 cross-references updated from `REFERENCE.md` to `CRONS.md` (4 Step 2 cron emission pointers + 3 worker self-poll pointers + 4 other cron-content references); 2 cross-references updated to `AUTOPILOT-RULES.md` (`/falcon enable-autopilot` profile-definitions lookup + autopilot-rules content references); v7.2.0 worker-cron-supersedes-by-self-poll cross-reference paragraph retained (closes Quartermaster Tension 1)
+- `SKILL.md` — frontmatter `version: 7.1.1` → `version: 7.2.0`; file-map updated with CRONS.md + AUTOPILOT-RULES.md entries
+- `changelog.md` — this entry
+
+### No behavior change
+
+Additive packaging refactor (condensed variants) + structural reorganization (file split). Full Step 0-N templates remain available as the canonical spec, just relocated. No new schema fields, no new CLI flags, no new runtime deps, no breaking changes to dispatched content. Existing `{{ var }}` marker + Claude-Code-driven substitution at CronCreate-time stays the templating mechanism (architecture.md "Keep falcon at 4 files; defer jinja adoption" decision remains intact for the template-engine choice; the *file count* moved from 4 to 6 within the skill directory, which is orthogonal — both decisions live in the updated architecture.md Design Decisions section).
+
+### Out of scope (deferred)
+
+- v7.1.1 worker self-poll cron prompts already short; no condensation needed (moved to CRONS.md as-is)
+- DAR-self-poll cron template work (same)
+- v8.0.0 inotify epic (deferred until 2026-08-01 per separate operator direction)
+
 ## 7.1.1 (2026-05-27)
 
 **Worker self-poll at pause points — closes the `--bg` `--autopilot` AFK wake-gap (fdev-0wv).** In `--bg` mode (v7.0.0+ default), steering's autopilot crons (`--auto-ack`, `--auto-amend`) faithfully write decisions to the dispatch file, but the worker session — idle in `claude agents` at intent-confirm — never observes those writes without an external poke (peek/reply, attach, `falcon poll`). The auto-ack-resume guard (PROTOCOL.md Worker Lifecycle Step 3) only fires when the worker takes a turn; it has no mechanism to schedule that turn itself. The documented "full AFK bundle" promise of `--autopilot` therefore degraded in `--bg` to "AFK except for the intent-ack wake injection" — exactly the pause point that most benefits from autonomous progression.

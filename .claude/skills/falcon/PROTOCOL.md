@@ -212,7 +212,9 @@ See https://code.claude.com/docs/en/agent-view "How background sessions are host
 
 **`--worker-cron` suppression in `--bg` mode (Q3 verdict):** when the dispatch mode is `--bg`, steering does NOT emit the worker-cron setup paste-block, and `--worker-cron` (whether explicit or via `--autopilot` expansion) is a SILENT NO-OP. The auto-ack-resume guard (PROTOCOL.md Worker Lifecycle Step 3) handles amendment pickup naturally because the worker re-reads the dispatch file on each active turn. The flag stays explicit for `--via-paste` / `--paste` users; no formal deprecation in v7.0.0. `--autopilot` macro behavior: in `--bg` mode, the macro still expands to `--auto-ack --auto-amend --worker-cron --watch`, but `--worker-cron` is suppressed at emission time.
 
-**Cron emission dispatch-mode split (v7.0.1):** all autopilot cron templates in REFERENCE.md branch their emission shape on the dispatch's `worker_dispatch_mode` field (set once at dispatch-time, read fresh on each fire). The two paths have fundamentally different interaction contracts; see REFERENCE.md `### Cron Dispatch-Mode Conventions (v7.0.1)` for the full rules. In summary:
+**Worker-side polling in `--bg` mode (v7.1.1+ — clarification, fdev-b2f):** users coming from `--worker-cron`-flag documentation may wonder what fills the gap if `--worker-cron` is a no-op in `--bg`. The answer is the v7.1.1 **worker self-poll** mechanism (`### Worker self-poll at pause points (v7.1.1)` above), which is a worker-side convention armed automatically at intent + DAR pause points — not a steering flag. The worker self-poll is `--bg`-mode-only and supersedes `--worker-cron` semantics in that mode; `--worker-cron` remains the worker-side polling mechanism for `--via-paste` / `--paste` modes.
+
+**Cron emission dispatch-mode split (v7.0.1):** all autopilot cron templates in CRONS.md branch their emission shape on the dispatch's `worker_dispatch_mode` field (set once at dispatch-time, read fresh on each fire). The two paths have fundamentally different interaction contracts; see CRONS.md `### Cron Dispatch-Mode Conventions (v7.0.1)` for the full rules. In summary:
 
 - **`--bg` path** — cron writes to the dispatch file (state-change contract) and emits a single inline `STATE:` line to steering's chat. No labeled-copy fences (operator monitors steering output directly; no paste-into-worker-tab step exists in `--bg`). Cron MUST NOT invoke `claude --resume <worker-session>` against a running `--bg` agent — Claude Code refuses with `Error: Session <uuid> is currently running as a background agent (bg). Use claude agents to find and attach to it, or add --fork-session to branch off a copy.` Cron MUST NOT invoke `claude --fork-session` either — forking creates a duplicate session that violates the single-worker-per-dispatch invariant (both sessions could write conflicting state to the dispatch file). The cron's file write is the contract; the worker self-polls via auto-ack-resume guard or `falcon poll` operator nudge.
 - **`--via-paste` / `--paste` path** — cron writes to the dispatch file AND emits the full labeled-copy fence (unchanged from prior versions). Operator pastes the fence contents into the worker tab; the worker reads as a regular user message.
@@ -279,7 +281,7 @@ For the bootstrap-prompt template + substitution variables + repo_path-anchor ra
 
 **Role split.** The cron's prompt is a *wake nudge with state-check instructions*. When the cron fires, its prompt is delivered to the worker session as a user-message-style notification. The WORKER — which holds the cron ID in session memory from the `CronCreate` return value — interprets the prompt, checks state, and executes `CronDelete(captured_id)` + resume on wait-condition-satisfied. The cron prompt does NOT carry a `<self-id>` placeholder; the worker resolves the reference using its captured ID.
 
-For the literal `CronCreate` blocks (armed by the worker; templated into the dispatch's `init_prompt` flow), see [`REFERENCE.md`](./REFERENCE.md#worker-self-poll-cron-templates---bg-mode-only-v711) `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)`.
+For the literal `CronCreate` blocks (armed by the worker; templated into the dispatch's `init_prompt` flow), see [`CRONS.md`](./CRONS.md#worker-self-poll-cron-templates---bg-mode-only-v711) `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)`.
 
 **Critical scope guardrail.** Self-poll crons are armed ONLY at explicit pause-for-steering points, NEVER as an always-on background poller. Armed during normal implementation, they would burn API calls polling the worker's own state while the worker is actively working. The worker's `CronDelete(captured_id)` on wait-condition-satisfied is part of the contract, not optional. `durable: false` is mandatory — the cron must die with the worker session if the operator kills the agent.
 
@@ -295,7 +297,7 @@ When `--watch` is set, after Step 1c (lock-registry check) and Step 2 (dispatch 
 
 Wiring:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--watch-cron-prompt-template-v680) `## Autopilot Cron Prompt Templates ### --watch cron prompt template`. The dispatch ID, dispatch file path, and snapshot file path are substituted into the template at CronCreate time — there are no generic crons.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`CRONS.md`](./CRONS.md#--watch-cron-prompt-template-v680) `## Autopilot Cron Prompt Templates ### --watch cron prompt template (v6.8.0) #### Condensed CronCreate prompt (v7.1.2)` (~250-token pointer-style; the cron Reads the canonical Steps 1-4 spec from the same section at fire time per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, and branch name are substituted into the template at CronCreate time — there are no generic crons.
 2. `CronCreate` returns an ID; steering writes it to `watch_cron_id` in the dispatch file.
 3. Cron cadence: default 10 minutes; override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-watch-<dispatch-id>` — used by `/falcon status` and `/falcon release-cron` for prefix-match lookups via `CronList`.
@@ -314,7 +316,7 @@ The STATUS UPDATE / `STATE: WATCH-STATUS-UPDATE` emission reports both counts. A
 
 **Worker contract**: per Worker Lifecycle Step 8, every commit MUST include `Closes: <bead-id>` in the message. In single-dispatch mode this was best-practice; in parallel-dispatch mode it's a CORRECTNESS requirement — without the trailer, the watch cron cannot attribute the commit and falls through to the degraded notification on first observation. Amend/rebase that drops the trailer triggers a one-time degraded notification per fire; subsequent fires stay quiet.
 
-**Adaptive cadence (v7.0.1, fdev-lbq.2):** the `--watch` cron does NOT have a per-fire adaptive guard — it's report-only and the file-read it does is already cheap. The other write-bearing crons (`--auto-ack`, `--auto-amend`) DO have a "Step 0 — Adaptive cadence early-exit guard" that short-circuits at minimum token cost when there's no work to do this fire (pre-window or post-window state). See REFERENCE.md cron templates for the exact guards.
+**Adaptive cadence (v7.0.1, fdev-lbq.2):** the `--watch` cron does NOT have a per-fire adaptive guard — it's report-only and the file-read it does is already cheap. The other write-bearing crons (`--auto-ack`, `--auto-amend`) DO have a "Step 0 — Adaptive cadence early-exit guard" that short-circuits at minimum token cost when there's no work to do this fire (pre-window or post-window state). See CRONS.md cron templates for the exact guards.
 
 **Dispatch lifecycle phases (v7.1 spec; impl deferred, fdev-lbq.27):** a dispatch moves through five phases over its lifetime. Each phase has a different relevance window for each cron type. `current_phase` is COMPUTED from existing dispatch-file fields (no new schema field needed):
 
@@ -447,7 +449,7 @@ When `--auto-ack` is set, after Step 1c (lock-registry check) and Step 2 (dispat
 
 This is the FIRST write-bearing autopilot cron (Phase 1's `--watch` was report-only). The wiring mirrors `--watch` but with stricter preconditions:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--auto-ack-cron-prompt-template-v690) `## Autopilot Cron Prompt Templates ### --auto-ack cron prompt template`. Dispatch ID, dispatch file path, snapshot file path, and repo path are substituted at CronCreate time.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`CRONS.md`](./CRONS.md#--auto-ack-cron-prompt-template-v690) `## Autopilot Cron Prompt Templates ### --auto-ack cron prompt template (v6.9.0) #### Condensed CronCreate prompt (v7.1.2)` (~400-token pointer-style with INLINE Step 0 adaptive guard; Steps 1-6 + advisor extension are pointer-style per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, repo path, and branch name are substituted at CronCreate time.
 2. `CronCreate` returns an ID; steering writes it to `autoack_cron_id` in the dispatch file.
 3. Cron cadence: default 5 minutes (shorter than `--watch`'s 10m because intent windows are brief and the cache-cost analysis from the v6.8.0 changelog applies here); override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-autoack-<dispatch-id>` — same prefix-match convention as `--watch`; `/falcon status` and `/falcon release-cron` discover both via slug-prefix.
@@ -469,7 +471,7 @@ When `--auto-amend` is set, after Step 1c (lock-registry check) and Step 2 (disp
 
 This is the THIRD entry in the cron prompt template registry (after `--watch` from Phase 1 and `--auto-ack` from Phase 2). Wiring follows the established pattern:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--auto-amend-cron-prompt-template-v6100) `## Autopilot Cron Prompt Templates ### --auto-amend cron prompt template`.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`CRONS.md`](./CRONS.md#--auto-amend-cron-prompt-template-v6100) `## Autopilot Cron Prompt Templates ### --auto-amend cron prompt template (v6.10.0) #### Condensed CronCreate prompt (v7.1.2)` (~450-token pointer-style with INLINE Step 0 adaptive guard; Steps 1-7 + advisor extension are pointer-style per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, repo path, and branch name are substituted at CronCreate time.
 2. `CronCreate` returns an ID; steering writes it to `amend_cron_id` in the dispatch file.
 3. Cron cadence: default 5 minutes (matches `--auto-ack`; amendment evaluation requires the worker's completion signal to be present, so the same fast-feedback window applies); override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-amend-<dispatch-id>` — same prefix-match teardown via `/falcon status` + `/falcon release-cron`.
@@ -499,7 +501,7 @@ Wiring at Step 2:
 2. Steering arms THREE crons (its own session): `falcon-watch-<dispatch-id>` (10m cadence by default), `falcon-autoack-<dispatch-id>` (5m by default), `falcon-amend-<dispatch-id>` (5m by default). All three armed via separate `CronCreate` calls; the returned IDs written to `watch_cron_id`, `autoack_cron_id`, `amend_cron_id` respectively.
 3. Steering emits TWO paste blocks for the user to copy into the worker tab:
    - Standard dispatch prompt (per [`REFERENCE.md`](./REFERENCE.md#dispatch-prompt-template) `## Dispatch Prompt Template`)
-   - Worker-cron setup paste-block (per [`REFERENCE.md`](./REFERENCE.md#--worker-cron-setup-paste-block-v6110) `### --worker-cron setup paste-block`)
+   - Worker-cron setup paste-block (per [`CRONS.md`](./CRONS.md#--worker-cron-setup-paste-block-v6110) `### --worker-cron setup paste-block`)
 4. User pastes both into the worker tab (order: dispatch prompt first, then worker-cron-setup). The worker session reads the dispatch file, arms its own `falcon-worker-<dispatch-id>` cron (3m cadence by default), and writes `worker_cron_id`.
 
 Four-cron coordination once everything is armed:
@@ -537,7 +539,7 @@ When `--release-on-merge` is set, after Step 1c (lock-registry check) and Step 2
 
 Wiring:
 
-1. Steering calls `CronCreate` with the prompt body from [`REFERENCE.md`](./REFERENCE.md#--release-on-merge-cron-prompt-template-v6120) `## Autopilot Cron Prompt Templates ### --release-on-merge cron prompt template`.
+1. Steering calls `CronCreate` with the **condensed** prompt body from [`CRONS.md`](./CRONS.md#--release-on-merge-cron-prompt-template-v6120) `## Autopilot Cron Prompt Templates ### --release-on-merge cron prompt template (v6.12.0) #### Condensed CronCreate prompt (v7.1.2)` (~200-token pointer-style; no Step 0 — single-purpose poller; Steps 1-5 are pointer-style per the v7.1.2 condensation work). Dispatch ID, dispatch file path, snapshot file path, repo path, and branch name are substituted at CronCreate time.
 2. `CronCreate` returns an ID; steering writes it to `merge_cron_id` in the dispatch file.
 3. Cron cadence: default 15 minutes (longer than the write-bearing crons because PR merges are low-frequency state changes; the cache-miss is amortized over the longer wait per the v6.7.0 cache-cost guidance). Override via `--cron-cadence Nm`.
 4. Cron ID naming convention: `falcon-merge-<dispatch-id>` — same prefix-match teardown via `/falcon release-cron`.
@@ -674,7 +676,7 @@ After stash, run `git fetch origin && git log origin/<branch> --oneline -5` so t
    surface that path inline so the operator can clean up the worktree.
 ```
 
-Skip the `claude rm` step in `--via-paste` / `--paste` modes — there's no `--bg` session row to remove. Skip ALSO if `worker_bg_session_id` is null (older dispatches predate this convention) — log a single-line "skipping claude rm; no worker_bg_session_id captured" and continue. Per-mode contract is captured in the cron Dispatch-Mode Conventions (REFERENCE.md).
+Skip the `claude rm` step in `--via-paste` / `--paste` modes — there's no `--bg` session row to remove. Skip ALSO if `worker_bg_session_id` is null (older dispatches predate this convention) — log a single-line "skipping claude rm; no worker_bg_session_id captured" and continue. Per-mode contract is captured in the cron Dispatch-Mode Conventions (CRONS.md).
 
 This applies to:
 - Step 4 auto-release (above)
@@ -914,8 +916,8 @@ Implementation:
    - Verify `.claude/rules/falcon-autopilot.md` exists. If not, refuse with: "falcon-autopilot.md not found; run /falcon create-rules first to scaffold it."
    - Verify `--profile=<name>` is present and is one of `conservative`, `standard`, `aggressive`. If missing or invalid: refuse with the three valid values + a one-line description of each.
 
-2. **Load profile definition from REFERENCE.md.**
-   The canonical profile definitions live in [`REFERENCE.md`](./REFERENCE.md#profile-definitions) `### Profile definitions` inside `## falcon-autopilot.md Template`. Parse the chosen profile's `(section, item, detection)` tuple list.
+2. **Load profile definition from AUTOPILOT-RULES.md.**
+   The canonical profile definitions live in [`AUTOPILOT-RULES.md`](./AUTOPILOT-RULES.md#profile-definitions) `### Profile definitions` inside AUTOPILOT-RULES.md `## falcon-autopilot.md Template`. Parse the chosen profile's `(section, item, detection)` tuple list.
 
 3. **Evaluate detection conditions per item.**
    Each profile item has a detection condition expressed as one of:
@@ -1231,7 +1233,7 @@ Use paste mode as a fallback, not a default.
 
    **Auto-ack-resume guard (v6.9.0):** before emitting the intent paragraph, re-read the dispatch file and inspect `intent_acknowledged_utc`. If it is already non-null AND no commits have landed for this dispatch yet (the worker can confirm by `git log origin/<branch> --oneline --since=<dispatch.created_utc>` returning zero entries from this worker's commit set), the auto-ack cron has already acked an intent on a prior session — skip the intent-confirm pause entirely and proceed straight to Step 4 (`bd update -s in_progress`). This prevents double-prompt confusion when a worker session restarts mid-dispatch after the cron already wrote `intent_acknowledged_utc`. If `intent_acknowledged_utc` is null OR commits have already landed (intent was acked AND consumed), proceed normally per the unguarded path: emit the intent paragraph, write to `implementation_intent`, await ack.
 
-   **Worker self-poll at intent pause (v7.1.1, `--bg` mode only):** in `--bg` mode, after writing `implementation_intent` and before the STOP-await-ack, arm a self-poll `CronCreate` scoped to the intent-ack wait condition (literal block in REFERENCE.md `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)`); CAPTURE the returned cron ID in session memory. The cron prompt — delivered to the worker session as a user-message-style notification when it fires every ~2 min — instructs the worker to re-read the dispatch file and, on observing `intent_acknowledged_utc` non-null, call `CronDelete(captured_id)` and proceed past intent-confirm into claim. This closes the `--bg` wake-gap where steering's `--auto-ack` cron has written the ack but the idle worker never observes it without an external poke. The predicate is intentionally `intent_acknowledged_utc != null` alone (no commit-attribution check): at this pause point, no commits could have landed for this dispatch yet by construction — contrast with the *auto-ack-resume guard* above, which uses a richer predicate because it runs on session resume and must disambiguate against history. Mandatory `durable: false` so the cron dies with the worker session. The self-poll does NOT apply in `--via-paste` / `--paste` modes (operator's `proceed <id>` paste is the wake mechanism). See [`### Worker self-poll at pause points (v7.1.1)`](#worker-self-poll-at-pause-points-v711) above for the full scope guardrail and coordination rationale.
+   **Worker self-poll at intent pause (v7.1.1, `--bg` mode only):** in `--bg` mode, after writing `implementation_intent` and before the STOP-await-ack, arm a self-poll `CronCreate` scoped to the intent-ack wait condition (literal block in CRONS.md `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)`); CAPTURE the returned cron ID in session memory. The cron prompt — delivered to the worker session as a user-message-style notification when it fires every ~2 min — instructs the worker to re-read the dispatch file and, on observing `intent_acknowledged_utc` non-null, call `CronDelete(captured_id)` and proceed past intent-confirm into claim. This closes the `--bg` wake-gap where steering's `--auto-ack` cron has written the ack but the idle worker never observes it without an external poke. The predicate is intentionally `intent_acknowledged_utc != null` alone (no commit-attribution check): at this pause point, no commits could have landed for this dispatch yet by construction — contrast with the *auto-ack-resume guard* above, which uses a richer predicate because it runs on session resume and must disambiguate against history. Mandatory `durable: false` so the cron dies with the worker session. The self-poll does NOT apply in `--via-paste` / `--paste` modes (operator's `proceed <id>` paste is the wake mechanism). See [`### Worker self-poll at pause points (v7.1.1)`](#worker-self-poll-at-pause-points-v711) above for the full scope guardrail and coordination rationale.
 4. For each bead: `bd update <id> -s in_progress`.
 5. Implement per the bead's description. Follow project standards.
 6. Verify per the bead's Testing Strategy AND project-level verification-gate rules. Verification is a CLOSE gate.
@@ -1282,7 +1284,7 @@ DAR shape:
 - Test failure surfaces a regression in a different bead's work → stop, do not paper over with one-off interop
 - Any project-specific tripwire your reading of `.claude/rules/` surfaces → STOP IMMEDIATELY
 
-**Worker self-poll at DAR pause (v7.1.1, `--bg` mode only):** when a worker stays alive waiting on a DAR `response` field (rather than partial-reporting per the HIGH-stakes path), arm a self-poll `CronCreate` scoped to the response-non-null wait condition (literal block in REFERENCE.md `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)`); CAPTURE the returned cron ID in session memory. The cron prompt — delivered to the worker session as a user-message-style notification when it fires every ~3 min — instructs the worker to re-read the dispatch file and, on observing the DAR entry's `response` field non-null, call `CronDelete(captured_id)` and incorporate the response. Mandatory `durable: false`. Self-poll does NOT apply in `--via-paste` / `--paste` modes. See `### Worker self-poll at pause points (v7.1.1)` in the `--bg dispatch mode` section above for scope guardrail and coordination rationale.
+**Worker self-poll at DAR pause (v7.1.1, `--bg` mode only):** when a worker stays alive waiting on a DAR `response` field (rather than partial-reporting per the HIGH-stakes path), arm a self-poll `CronCreate` scoped to the response-non-null wait condition (literal block in CRONS.md `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)`); CAPTURE the returned cron ID in session memory. The cron prompt — delivered to the worker session as a user-message-style notification when it fires every ~3 min — instructs the worker to re-read the dispatch file and, on observing the DAR entry's `response` field non-null, call `CronDelete(captured_id)` and incorporate the response. Mandatory `durable: false`. Self-poll does NOT apply in `--via-paste` / `--paste` modes. See `### Worker self-poll at pause points (v7.1.1)` in the `--bg dispatch mode` section above for scope guardrail and coordination rationale.
 
 ---
 
