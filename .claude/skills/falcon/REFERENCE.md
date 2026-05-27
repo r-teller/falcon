@@ -192,6 +192,30 @@ merge_cron_id: null   # CronCreate-returned ID for the merge-poll cron (v6.12.0+
                       # and the cache-miss is amortized over the longer wait). Same
                       # prefix-match teardown via /falcon release-cron.
 
+phase_transitions: []   # v7.1 SPEC (impl deferred, fdev-lbq.27).
+                        # Forensic record of dispatch lifecycle phase transitions.
+                        # Each entry is appended by the Phase Transition Handler
+                        # (PROTOCOL.md `### Phase Transition Handler (v7.1)`) when
+                        # current_phase (computed from existing fields) changes:
+                        #   - from: pre_intent | intent_confirm | implementation |
+                        #           verify_amendment | post_validated
+                        #   - to: same enum
+                        #   - utc: ISO8601 timestamp of transition detection
+                        #   - cron_re_arms: list of per-cron actions during this
+                        #     transition. Each entry:
+                        #       - cron: "watch" | "autoack" | "amend"
+                        #       - old_id: <cron-id string> | null
+                        #       - new_id: <cron-id string> | null
+                        #       - old_cadence_m: integer minutes | null
+                        #       - new_cadence_m: integer minutes | null
+                        #       - self_cancelled: true | false
+                        #       - rearm_failure: null | <error short-code>
+                        # current_phase is NOT stored here — computed from
+                        # implementation_intent / intent_acknowledged_utc /
+                        # implementation_results_hash / session_status. See
+                        # PROTOCOL.md `### Mode selection + detection` §"Dispatch
+                        # lifecycle phases" for the derivation rule.
+
 cron_telemetry: {}   # v7.0.1 SPEC (impl deferred to v7.1, fdev-lbq.6).
                      # Each cron template will increment its own counters here on fire-entry,
                      # classifying the exit as "silent" (Step 0 early-exit) or "useful" (Step 1+
@@ -1603,6 +1627,16 @@ Recommended substitution at Step 2 (per dispatch — different dispatches can pi
 The LCM of cadences (5, 7, 11, 15) is 1155 minutes — total alignment cycle is ~19hr. Within any given minute, at most 1 cron should fire if the offsets are chosen carefully. The `*/N` shorthand in each template below is the simplified form; steering MAY emit the staggered form at CronCreate-time without changing semantics.
 
 If the cadence is overridden via `--cron-cadence Nm`, the offset SHOULD shift to maintain LCM-minimization. A reasonable heuristic: pick `offset = (cron_slug_hash mod N)` where `cron_slug_hash` is the SHA256 of `falcon-<role>-<dispatch-id>` reduced to an integer. This deterministically spreads multiple dispatches across the cycle.
+
+### Two cadence-adaptation mechanisms (v7.1 spec; impl deferred)
+
+Falcon's v7.0.1 + v7.1 cron cadence model has TWO orthogonal adaptation mechanisms operating at different scales:
+
+1. **Per-fire Step 0 adaptive cadence guards (v7.0.1, fdev-lbq.2 + fdev-lbq.3)**: each `--auto-ack` and `--auto-amend` cron template carries a Step 0 early-exit guard that probes the dispatch file's state-driving fields via a minimal yq query and exits silently when there's nothing to do. **Token cost** is what adapts (the cadence itself stays fixed at the CronCreate-assigned schedule). Implemented in v7.0.1.
+
+2. **Per-phase cadence re-arming via CronCreate (v7.1 spec, fdev-lbq.27)**: steering observes dispatch lifecycle phase (computed from existing fields per PROTOCOL.md `### Mode selection + detection` §"Dispatch lifecycle phases") and on each phase transition, performs CronDelete-then-CronCreate to RE-ARM each cron at the phase-appropriate cadence. **The cadence itself** is what adapts (Step 0 still fires per the same CronCreate-assigned schedule, just at a different schedule across phases). Spec landed in v7.0.1; implementation deferred to v7.1.
+
+The two mechanisms compose: per-phase re-arm picks the schedule; per-fire Step 0 makes each fire cheap when state hasn't shifted. fdev-lbq.25 (forecast-driven initial cadence) supplies the bucket value that per-phase multipliers modulate. fdev-lbq.27 (this bead's parent design) ties phase × cron × bucket together via the multiplier table in PROTOCOL.md `### Phase Transition Handler (v7.1)`.
 
 ### `claude agents` CLI surface (v7.0.1)
 

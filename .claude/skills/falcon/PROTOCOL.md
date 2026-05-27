@@ -293,6 +293,20 @@ The STATUS UPDATE / `STATE: WATCH-STATUS-UPDATE` emission reports both counts. A
 
 **Adaptive cadence (v7.0.1, fdev-lbq.2):** the `--watch` cron does NOT have a per-fire adaptive guard — it's report-only and the file-read it does is already cheap. The other write-bearing crons (`--auto-ack`, `--auto-amend`) DO have a "Step 0 — Adaptive cadence early-exit guard" that short-circuits at minimum token cost when there's no work to do this fire (pre-window or post-window state). See REFERENCE.md cron templates for the exact guards.
 
+**Dispatch lifecycle phases (v7.1 spec; impl deferred, fdev-lbq.27):** a dispatch moves through five phases over its lifetime. Each phase has a different relevance window for each cron type. `current_phase` is COMPUTED from existing dispatch-file fields (no new schema field needed):
+
+| Phase | Detection |
+|-------|-----------|
+| `pre_intent` | `implementation_intent` is null |
+| `intent_confirm` | `implementation_intent` non-null AND `intent_acknowledged_utc` is null |
+| `implementation` | `intent_acknowledged_utc` non-null AND `implementation_results_hash` is null |
+| `verify_amendment` | `implementation_results_hash` non-null AND `session_status` != "complete" |
+| `post_validated` | `session_status` == "complete" |
+
+A new `phase_transitions[]` field on the dispatch file records each transition forensically (`{from, to, utc, cron_re_arms: [...]}`); see REFERENCE.md Dispatch File YAML Schema for the entry shape.
+
+The Phase Transition Handler (below) detects transitions on each steering invocation and re-arms crons at phase-appropriate cadence. See `### Phase Transition Handler (v7.1)` below this section.
+
 **Forecast-driven initial cadence (v7.0.1 spec; impl deferred to v7.1, fdev-lbq.25):** the default cadences (5m / 5m / 11m / 15m for auto-ack / auto-amend / watch / release-on-merge) are tuned for medium-size beads (~25-60 turns). For very short or very long beads, the cadences are mis-calibrated — short beads see noisy over-polling; long beads underutilize the cadence budget. The bead's Effort Forecast (per `.claude/docs/work-item-templates.md` §Effort Forecast contract, with Total turns + Confidence) can drive initial cadence bucketing at dispatch time. The proposed bucket table:
 
 | Total Turns | Initial cadence (auto-ack / auto-amend / watch) |
@@ -304,6 +318,67 @@ The STATUS UPDATE / `STATE: WATCH-STATUS-UPDATE` emission reports both counts. A
 Confidence modulator: `low` → shift one bucket faster (catch overruns); `high` → shift one bucket slower (reduce noise). Missing Effort Forecast → use medium bucket default (graceful degrade).
 
 **v7.0.1 ships the SPEC and the bucket table; implementation deferred to v7.1.** Rationale: the in-prompt Step 0 adaptive-cadence guards (`fdev-lbq.2`/`fdev-lbq.3`) already reduce per-fire cost in quiescent windows, capturing most of the noise reduction without touching CronCreate semantics. Cadence-bucketing-at-dispatch-time requires parameterizing the CronCreate schedule string + reading Effort Forecast prose from bead bodies — both larger changes that benefit from the v7.0.x retro experience first. When v7.1 implements this, Step 2 of the dispatch protocol picks up an Effort-Forecast read + bucket lookup before the CronCreate calls.
+
+### Phase Transition Handler (v7.1 spec; impl deferred, fdev-lbq.27)
+
+Builds on the bucket table above. Where fdev-lbq.25's bucket sets the INITIAL cadence at dispatch start, this handler detects phase transitions during the dispatch lifecycle and RE-ARMS each cron at the phase-appropriate cadence. Each phase × cron-type pair has a multiplier applied to the bucket cadence.
+
+**Per-phase cadence multiplier table:**
+
+| Phase | `--auto-ack` multiplier | `--auto-amend` multiplier | `--watch` multiplier |
+|-------|-------------------------|---------------------------|----------------------|
+| `pre_intent` | × 2 (SLOW — nothing to ack yet) | × 2 (SLOW — no completion yet) | × 1 (default — watching for intent emission) |
+| `intent_confirm` | × 0.5 (FAST — ack-latency matters) | × 2 (SLOW — still no completion) | × 1 (default) |
+| `implementation` | self-cancel via Step 0 (already-acked early-exit) | × 2 (SLOW — completion pending) | × 1 (default — watching for completion + commits) |
+| `verify_amendment` | (quiescent; Step 0 catches) | × 0.5 (FAST — gap detection latency matters) | × 1 (default) |
+| `post_validated` | self-cancel | self-cancel | self-cancel |
+
+Multipliers stack on top of fdev-lbq.25's bucket cadence: `effective_cadence = bucket_cadence × phase_multiplier`. Floors at 1m to prevent over-polling on a short-bucket fast-phase combination.
+
+**Transition-detection ownership: STEERING-SIDE.** A cron cannot reliably re-arm itself mid-fire (CronCreate semantics + race with self-cancel + Claude Code's cron sandbox lifecycle). Steering observes phase on each invocation (or on each cron-fire's STATE: emission via this handler) and re-arms when needed.
+
+**Re-arm sequence on transition:**
+
+```
+1. Compute current_phase from dispatch file fields (see "Dispatch lifecycle phases" above).
+2. Read previous_phase from phase_transitions[].last_or_null.
+3. If current_phase == previous_phase: no transition; exit.
+4. For each armed cron (watch, autoack, amend):
+   a. CronDelete <cron_id>  (best-effort — ignore failure; cron may have
+      self-cancelled already)
+   b. Compute new cadence:
+        new_cadence_minutes = bucket_minutes × multiplier(cron, current_phase)
+        floor(1m, new_cadence_minutes)
+      If multiplier indicates self-cancel (post_validated phase OR ack in
+      implementation phase): skip CronCreate; this cron is done.
+   c. CronCreate with the new schedule string (offset-staggered per
+      fdev-lbq.5 convention; cron_slug_hash mod new_N for the offset)
+   d. Update <cron>_cron_id on dispatch file with the new returned ID
+      (atomic write; preserve all other fields)
+5. Append a new entry to phase_transitions[] (forensic record):
+     - from: <previous_phase>
+     - to: <current_phase>
+     - utc: <UTC ISO8601 at transition detection>
+     - cron_re_arms:
+         - cron: "watch", old_id: "<x>", new_id: "<y>", old_cadence_m: N, new_cadence_m: M
+         - cron: "autoack", ... (or { cron: "autoack", self_cancelled: true })
+         - cron: "amend", ...
+```
+
+**Failure modes:**
+
+- **CronDelete fails** (cron already self-cancelled, ID is stale): proceed with CronCreate. Emit ONE inline log line per failed CronDelete: `CronDelete <id> failed (likely already self-cancelled); proceeding with re-arm.` Do not block transition.
+- **CronCreate fails on re-arm** (transient API error, quota, etc.): log inline + graceful degrade — keep running with the OLD cadence by NOT updating `<cron>_cron_id` on the dispatch file. Surface: `CronCreate re-arm failed for <cron>; continuing with prior cadence <N>m. Investigate.` Never end up cron-less for a phase that needs polling.
+- **Multiple transitions within one cycle** (e.g., worker emits intent and gets acked within 30s, before steering's next invocation): later-transition-wins. The handler computes current_phase fresh on each invocation; only ONE re-arm executes per cron per steering invocation regardless of how many intermediate phases were technically crossed.
+- **`current_phase` regression** (theoretically impossible since detection is forward-only on existing fields): if observed, log a warning, take no action, and surface the dispatch file state inline for investigation.
+
+**Where this handler runs in Step 4:** Step 4 (Stash for Wrapup + Auto-Release) runs the handler AFTER the safe-to-release check but BEFORE the auto-release path itself. Rationale: a successful auto-release triggers the `post_validated` transition which self-cancels all crons; running the handler first catches the transition + re-arms (or self-cancels) cleanly. If steering is invoked mid-dispatch without a release (operator just running `/falcon status` or similar), Step 4 is skipped but the handler can be invoked directly via `/falcon transition <dispatch-id>` (operator command, also v7.1 spec).
+
+**Cross-references:**
+- Bucket cadences: `### Mode selection + detection` (above) §Forecast-driven initial cadence
+- Step 0 per-fire adaptive guards: fdev-lbq.2/.3 (orthogonal — Step 0 = per-fire cost; this handler = per-phase cadence)
+- Cron telemetry instrumentation: fdev-lbq.6 (records `phase_transitions[]` events alongside fire counts)
+- Offset staggering for re-arm cadences: fdev-lbq.5 convention applies to new CronCreate calls
 
 ### --auto-ack mode (autopilot intent acknowledgement, v6.9.0)
 
@@ -324,6 +399,8 @@ The cron self-cancels on terminal state (`session_status: complete`). Manual tea
 **Dual-cron coordination with `--watch`:** when both flags are set, two separate crons run with independent slugs and sidecars. They do not coordinate; each evaluates its own state-change criteria. Combining them was rejected at Phase 2 design time because flag-aware branching inside a single cron template adds complexity for marginal cron-count savings, and the prefix-match teardown convention already handles multi-cron-per-dispatch cleanly.
 
 **Worker-side complement (see Worker Lifecycle Step 3 below):** the worker checks `intent_acknowledged_utc` on each resume prompt. If non-null AND no commits have landed yet, the worker skips the intent-confirm pause and proceeds straight to claim — eliminating the double-prompt that would otherwise occur if the worker session restarts after the cron already acked.
+
+**Phase-active windows (v7.1 spec; impl deferred, fdev-lbq.27):** `--auto-ack` peaks at fast cadence (× 0.5 bucket) in the `intent_confirm` phase; is slow (× 2) in `pre_intent`; and self-cancels once it transitions to `implementation` (intent_acknowledged_utc is non-null; Step 0 guard already short-circuits, but the per-phase handler can also CronDelete it entirely). See `### Phase Transition Handler (v7.1)` for the multiplier table and re-arm sequence.
 
 ### --auto-amend mode + --amendment-budget HALT (v6.10.0)
 
@@ -348,6 +425,8 @@ This is the THIRD entry in the cron prompt template registry (after `--watch` fr
 **Manual-amendment budget exemption:** only `auto-issued:cron`-labeled amendments decrement the budget. Amendments written by the user (or by steering on manual relay) do NOT count against the cap. This lets the user keep iterating manually after the cron has halted, without changing the cap.
 
 **Triple-cron coordination:** when `--watch --auto-ack --auto-amend` are all armed, three separate crons run side-by-side with independent slugs and sidecars. They do not coordinate; the `--watch` cron observes state changes that the other two crons cause. The prefix-match teardown convention handles all three together via `/falcon release-cron`.
+
+**Phase-active windows (v7.1 spec; impl deferred, fdev-lbq.27):** `--auto-amend` peaks at fast cadence (× 0.5 bucket) in the `verify_amendment` phase (completion emitted → released); is slow (× 2) in `pre_intent` / `intent_confirm` / `implementation` (no completion yet); and self-cancels in `post_validated`. The amendment-budget HALT path is orthogonal to the phase-active cadence — when the budget exhausts, the cron stays at the verify_amendment cadence but Step 0 / Step 4 guards suppress further amendment issuance. See `### Phase Transition Handler (v7.1)` for the multiplier table and re-arm sequence.
 
 ### --autopilot mode (full AFK bundle, v6.11.0)
 
