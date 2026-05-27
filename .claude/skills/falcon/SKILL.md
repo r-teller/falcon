@@ -2,7 +2,7 @@
 name: falcon
 description: Falcon — generate a self-contained prompt that ships a bead set to a remote session for autonomous work, returning a structured report this session can feed straight into /wrapup
 tier: dispatch
-version: 7.1.2
+version: 7.2.0
 created: 2026-05-21
 allowed-tools: Read, Bash, Write
 ---
@@ -12,7 +12,9 @@ allowed-tools: Read, Bash, Write
 > Version history: see [`changelog.md`](./changelog.md)
 > CLI surface (commands + flags + examples): see [`COMMANDS.md`](./COMMANDS.md)
 > Full lifecycle protocol: see [`PROTOCOL.md`](./PROTOCOL.md)
-> Schemas + templates: see [`REFERENCE.md`](./REFERENCE.md)
+> Schemas + non-cron templates: see [`REFERENCE.md`](./REFERENCE.md)
+> Cron prompt templates (worker self-poll + 5 autopilot crons): see [`CRONS.md`](./CRONS.md) — split out at v7.2.0
+> falcon-autopilot.md rules-file template: see [`AUTOPILOT-RULES.md`](./AUTOPILOT-RULES.md) — split out at v7.2.0
 
 `/falcon` emits a self-contained prompt for a **different agent session** to work a specified set of beads end-to-end (claim → implement → test → commit → close), then return a structured report this session uses to update `changelog.yaml` + `handoff.yaml` at `/wrapup` time.
 
