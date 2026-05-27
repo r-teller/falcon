@@ -135,6 +135,7 @@ Synthesize the branch-keyed stash (`.claude/tmp/falcon-reports-<sanitized-branch
 - budget-exhausted dispatches
 - release-on-merge dispatches
 - standards firings + discovered work + per-dispatch detail
+- **v7.1.0 (fdev-lbq.30):** cron telemetry per-cron `fires / silent / useful / signal_density` aggregated across all dispatches on the branch, plus a "dispatches without telemetry" legacy-accounting line. Target signal density: > 30% per cron.
 
 Emits a `RETRO SUMMARY` block (per the v6.5.3 labeled-copy convention) — no inline narrative. Output is consumed by `/wrapup` (v2.4+ reads it automatically when present in the steering transcript; older `/wrapup` requires the user to paste the block).
 

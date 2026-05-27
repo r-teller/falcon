@@ -845,10 +845,32 @@ Implementation:
 
     <next dispatch...>
 
+    ## Cron Telemetry (v7.1.0, fdev-lbq.30)
+
+    <Per-cron aggregate across all dispatches on the branch. Source:
+    cron_telemetry field on each dispatch file. Format: per-row
+    fires / silent / useful / signal_density = useful / fires × 100.
+    Dispatches predating v7.1.0 (no cron_telemetry field) are
+    excluded from aggregation and reported on a final line.>
+
+    Cron        Fires   Silent  Useful  Signal density
+    watch       <N>     <N>     <N>     <N>%
+    autoack     <N>     <N>     <N>     <N>%
+    amend       <N>     <N>     <N>     <N>%
+    worker      <N>     <N>     <N>     <N>%
+    merge       <N>     <N>     <N>     <N>%
+    (dispatches without telemetry: <N>)
+
+    Target signal density (per v7.1.0 design intent): > 30% per cron.
+    If autoack or amend signal density < 30%, autopilot calibration
+    may need tuning: shrink bucket cadences, sharpen phase multipliers,
+    or revisit the Step 0 early-exit predicates.
+
     ## Calibration notes
 
     <any "amendment budget too tight" / "auto-ack defer rate high" / "advisor
-    forked more than expected" patterns the synthesizer detects>
+    forked more than expected" / "cron signal density below 30%" patterns
+    the synthesizer detects>
 
     For incorporation into wrapup: feed RETRO SUMMARY block into the
     autopilot_audit section of the wrapup synthesis.

@@ -226,8 +226,8 @@ phase_transitions: []   # v7.1.0 LIVE (fdev-lbq.29 implements fdev-lbq.27 spec).
                         #   - Failed:     { cron, error: "create_failed" | "delete_failed", details }
                         #                 (graceful degrade; <cron>_cron_id unchanged)
 
-cron_telemetry: {}   # v7.0.1 SPEC (impl deferred to v7.1, fdev-lbq.6).
-                     # Each cron template will increment its own counters here on fire-entry,
+cron_telemetry: {}   # v7.1.0 LIVE (fdev-lbq.30 implements fdev-lbq.6 spec).
+                     # Each cron template increments its own counters here on fire-entry,
                      # classifying the exit as "silent" (Step 0 early-exit) or "useful" (Step 1+
                      # executed any work). Schema per cron slug:
                      #   cron_telemetry:
@@ -239,10 +239,12 @@ cron_telemetry: {}   # v7.0.1 SPEC (impl deferred to v7.1, fdev-lbq.6).
                      # /falcon retro --branch aggregates these per dispatch and emits a "Cron
                      # Telemetry" subsection summarizing fire counts + signal-density ratios.
                      # Useful for empirical autopilot calibration — operators can verify
-                     # whether the v7.0.1 adaptive-cadence guards (fdev-lbq.2/.3) are landing
-                     # on signal-density numbers > 30% as expected. Spec landed in v7.0.1;
-                     # implementation requires wiring the counters into every cron template +
-                     # extending /falcon retro emitter — both deferred to v7.1.
+                     # whether the v7.0.1 adaptive-cadence guards (fdev-lbq.2/.3) + v7.1.0
+                     # forecast bucketing (fdev-lbq.28) + per-phase re-arming (fdev-lbq.29)
+                     # are landing on signal-density numbers > 30% as expected.
+                     # Implementation contract: see REFERENCE.md `### Cron Telemetry
+                     # Instrumentation (v7.1.0, fdev-lbq.30)` for slug map + classify rules
+                     # + atomic-write discipline + backward-compat notes.
 
 advisor: null   # set to "<agent-name>" (e.g., "quartermaster") by --advisor=<agent> at
                 # dispatch time (v6.12.0+). Read by --auto-ack and --auto-amend cron
@@ -1672,6 +1674,26 @@ Reference table of the Claude Code `claude agents` (and adjacent `claude <verb>`
 | `claude --fork-session` | Branch off a copy of a session | **NEVER use for falcon dispatches** — creates duplicate session violating single-worker-per-dispatch invariant. See Cron Dispatch-Mode Conventions below. |
 
 **Anti-patterns explicitly documented above:** `claude --resume` and `claude --fork-session` are listed so cron-template authors and AI assistants seeing them suggested in error messages know NOT to reach for them. Both are valid in other Claude Code contexts (resume a saved interactive session; branch off for experimental exploration), but neither fits falcon's running-`--bg`-worker model.
+
+### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)
+
+Every autopilot cron template carries a telemetry-counter contract — on each fire entry, increment `cron_telemetry.<slug>.fires`; before exit, classify the outcome and increment EITHER `silent` (Step 0 early-exit OR no state change detected by Step 1+) OR `useful` (Step 1+ executed any real work: emitted a STATE/fence block, wrote to the dispatch file, called CronDelete/CronCreate, etc.). The atomic-write discipline that already governs dispatch-file edits applies — counter increments are dispatch-file writes; the same locking + write-temp-then-rename pattern preserves correctness under concurrent fires.
+
+**Slug map (`<slug>` in `cron_telemetry.<slug>`):**
+
+| Cron type | Slug | Notes |
+|-----------|------|-------|
+| `--watch` | `watch` | Always armed in `--autopilot`; cadence × 1 across phases |
+| `--auto-ack` | `autoack` | CronDelete'd on `implementation` transition per fdev-lbq.29 |
+| `--auto-amend` | `amend` | Peak in `verify_amendment` phase |
+| `--worker-cron` | `worker` | `--via-paste` only (no-op in `--bg`) |
+| `--release-on-merge` | `merge` | Optional flag; PR-merge polling |
+
+**Invariant**: for any slug, `fires == silent + useful` at all times. A fire that crashes mid-execution (rare; the cron prompt is short-running) leaves `fires` incremented but neither `silent` nor `useful` — this is the only legitimate accumulated drift and surfaces in /falcon retro as an unaccounted-for delta.
+
+**Backward compat**: dispatches predating v7.1.0 have `cron_telemetry: {}` (empty object — the schema field was reserved in v7.0.1). On first fire after upgrade, each cron initializes its sub-map. /falcon retro emission gracefully reports "telemetry not available" for dispatches with no `cron_telemetry` field at all.
+
+**Each template below has been updated to call this contract** at its Step 1 (fire entry) and at each exit path. The instrumentation is mechanical — no logic change in any cron's existing decision tree.
 
 ### Cron Dispatch-Mode Conventions (v7.0.1)
 

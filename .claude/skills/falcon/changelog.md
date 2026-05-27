@@ -62,7 +62,13 @@ The cron cadence model now has THREE LIVE mechanisms operating at different scal
 2. **Forecast-driven initial cadence (v7.1.0, fdev-lbq.28)** — picks the initial bucket at CronCreate time.
 3. **Per-phase cadence re-arming (v7.1.0, fdev-lbq.29)** — shifts cadence as the dispatch progresses through phases. Re-arms via CronCreate on transition.
 
-When fdev-lbq.30 (cron telemetry impl) ships, /falcon retro will emit signal-density numbers per cron to empirically validate the multiplier table. Target: signal-density > 30% across the dispatch lifetime.
+**Cron telemetry instrumentation — LIVE (fdev-lbq.30 implements fdev-lbq.6 spec).** Each autopilot cron now follows a counter-increment contract: on fire entry, increment `cron_telemetry.<slug>.fires`; before exit, classify outcome (silent / useful) and increment the matching counter. Slug map: `watch` / `autoack` / `amend` / `worker` / `merge`. Invariant: `fires == silent + useful` at all times. Atomic-write discipline preserves correctness under concurrent fires. Backward compat: dispatches predating v7.1.0 with no `cron_telemetry` field are excluded from /falcon retro aggregation and reported on a final line.
+
+`/falcon retro --branch <name>` now emits a "Cron Telemetry" subsection in the RETRO SUMMARY block with per-cron `fires / silent / useful / signal_density` columns aggregated across all dispatches on the branch. Target signal density (per v7.1.0 design intent): > 30% per cron. The subsection also includes a "dispatches without telemetry: N" line for the legacy-dispatches accounting.
+
+Implementation contract is centralized in REFERENCE.md `### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)` (slug map + classify rules + atomic-write notes + backward-compat).
+
+With all three v7.1.0 features now LIVE (fdev-lbq.28 + fdev-lbq.29 + fdev-lbq.30), operators get end-to-end empirical autopilot calibration: forecast picks the initial bucket; per-phase re-arming shifts cadence through the lifecycle; telemetry validates whether the result lands on the > 30% signal-density target.
 
 ## 7.0.1 (2026-05-27)
 
