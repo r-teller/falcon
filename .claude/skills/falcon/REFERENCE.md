@@ -192,6 +192,24 @@ merge_cron_id: null   # CronCreate-returned ID for the merge-poll cron (v6.12.0+
                       # and the cache-miss is amortized over the longer wait). Same
                       # prefix-match teardown via /falcon release-cron.
 
+cron_telemetry: {}   # v7.0.1 SPEC (impl deferred to v7.1, fdev-lbq.6).
+                     # Each cron template will increment its own counters here on fire-entry,
+                     # classifying the exit as "silent" (Step 0 early-exit) or "useful" (Step 1+
+                     # executed any work). Schema per cron slug:
+                     #   cron_telemetry:
+                     #     watch:    { fires: N, silent: M, useful: K }
+                     #     autoack:  { fires: N, silent: M, useful: K }
+                     #     autoamend:{ fires: N, silent: M, useful: K }
+                     #     merge:    { fires: N, silent: M, useful: K }
+                     #     worker:   { fires: N, silent: M, useful: K } (--via-paste only)
+                     # /falcon retro --branch aggregates these per dispatch and emits a "Cron
+                     # Telemetry" subsection summarizing fire counts + signal-density ratios.
+                     # Useful for empirical autopilot calibration — operators can verify
+                     # whether the v7.0.1 adaptive-cadence guards (fdev-lbq.2/.3) are landing
+                     # on signal-density numbers > 30% as expected. Spec landed in v7.0.1;
+                     # implementation requires wiring the counters into every cron template +
+                     # extending /falcon retro emitter — both deferred to v7.1.
+
 advisor: null   # set to "<agent-name>" (e.g., "quartermaster") by --advisor=<agent> at
                 # dispatch time (v6.12.0+). Read by --auto-ack and --auto-amend cron
                 # templates to know whether to fork ambiguous decisions to the named agent

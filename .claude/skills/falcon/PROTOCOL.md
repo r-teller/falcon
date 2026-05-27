@@ -293,6 +293,18 @@ The STATUS UPDATE / `STATE: WATCH-STATUS-UPDATE` emission reports both counts. A
 
 **Adaptive cadence (v7.0.1, fdev-lbq.2):** the `--watch` cron does NOT have a per-fire adaptive guard — it's report-only and the file-read it does is already cheap. The other write-bearing crons (`--auto-ack`, `--auto-amend`) DO have a "Step 0 — Adaptive cadence early-exit guard" that short-circuits at minimum token cost when there's no work to do this fire (pre-window or post-window state). See REFERENCE.md cron templates for the exact guards.
 
+**Forecast-driven initial cadence (v7.0.1 spec; impl deferred to v7.1, fdev-lbq.25):** the default cadences (5m / 5m / 11m / 15m for auto-ack / auto-amend / watch / release-on-merge) are tuned for medium-size beads (~25-60 turns). For very short or very long beads, the cadences are mis-calibrated — short beads see noisy over-polling; long beads underutilize the cadence budget. The bead's Effort Forecast (per `.claude/docs/work-item-templates.md` §Effort Forecast contract, with Total turns + Confidence) can drive initial cadence bucketing at dispatch time. The proposed bucket table:
+
+| Total Turns | Initial cadence (auto-ack / auto-amend / watch) |
+|---|---|
+| ≤ 15 (short)  | 2m / 4m / 6m |
+| 16-50 (medium) | 4m / 7m / 11m (current default) |
+| > 50 (long) | 8m / 14m / 22m |
+
+Confidence modulator: `low` → shift one bucket faster (catch overruns); `high` → shift one bucket slower (reduce noise). Missing Effort Forecast → use medium bucket default (graceful degrade).
+
+**v7.0.1 ships the SPEC and the bucket table; implementation deferred to v7.1.** Rationale: the in-prompt Step 0 adaptive-cadence guards (`fdev-lbq.2`/`fdev-lbq.3`) already reduce per-fire cost in quiescent windows, capturing most of the noise reduction without touching CronCreate semantics. Cadence-bucketing-at-dispatch-time requires parameterizing the CronCreate schedule string + reading Effort Forecast prose from bead bodies — both larger changes that benefit from the v7.0.x retro experience first. When v7.1 implements this, Step 2 of the dispatch protocol picks up an Effort-Forecast read + bucket lookup before the CronCreate calls.
+
 ### --auto-ack mode (autopilot intent acknowledgement, v6.9.0)
 
 When `--auto-ack` is set, after Step 1c (lock-registry check) and Step 2 (dispatch file write), steering arms a steering-side cron via `CronCreate` that evaluates the `SAFE_TO_ACK_INTENT` 4-gate predicate against the worker's intent paragraph on each fire. When all gates pass, the cron writes `intent_acknowledged_utc` to the dispatch file and emits the `proceed <dispatch-id>` block inline. When any gate fails, the cron defers silently with one inline note (per intent) explaining which gate failed and how to manually ack.

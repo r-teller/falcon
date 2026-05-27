@@ -106,6 +106,18 @@ Per fdev-lbq.8 docs: `claude rm` is the correct primitive here (NOT `claude stop
 - **`--fork-session` anti-pattern (fdev-lbq.23):** documentation work already landed as part of fdev-lbq.9/.19/.22 — anti-pattern callouts present in PROTOCOL.md `### --bg dispatch mode`, REFERENCE.md `### Cron Dispatch-Mode Conventions` + `### claude agents CLI surface`, and COMMANDS.md `### --autopilot ✓`. Bead closed as already-implemented.
 - **Wake-phrase (`falcon poll`) (fdev-lbq.24):** REFERENCE.md default init_prompt template now recognizes the case-insensitive regex `^(falcon poll|/falcon-poll)\s*$` as a wake nudge — worker re-reads dispatch file, processes pending amendments, emits STATE: WAKE-PHRASE-PROCESSED, resumes prior context. Operators nudge idle/supervisor-stopped `--bg` workers via `claude agents` peek-and-reply without typing long instructions.
 
+### Distribution additions: PR template + workflow-execution updates
+
+- **`.claude/docs/PULL_REQUEST_TEMPLATE.md`** — new file. Adopters cloning falcon get a ready-to-use PR description template with sections for Summary / Changes (per-bead) / Schema-API changes / Files Changed table / Beads (planned + discovered + deferred) / Test Plan / Deploy Notes. The template is intentionally generic (no falcon-specific scaffolding) so it works for any project that vendors falcon.
+- **`.claude/rules/workflow-execution.md`** updates — refines the Confirmation Gates section (publication-intent rule, gated vs ungated table) + Post-PR updates procedure (full template re-review against cumulative work) + Autonomy-instructions-do-not-authorize-gated-actions guidance. Reference to `.claude/docs/PULL_REQUEST_TEMPLATE.md` added for post-PR reviews. Operators adopting falcon's workflow now have a clearer contract around when explicit user approval is required.
+
+### Spec-only additions (impl deferred to v7.1): forecast-driven cadence + cron telemetry (fdev-lbq.25 + fdev-lbq.6)
+
+Two design specs landed in v7.0.1 but their implementations defer to v7.1 because the in-prompt adaptive-cadence guards (fdev-lbq.2/.3) already capture the bulk of the noise-reduction benefit, and the deferred work touches more surface (CronCreate parameterization + dispatch-time bead-body parsing).
+
+- **Forecast-driven initial cadence (fdev-lbq.25)** — PROTOCOL.md `### --watch mode` documents the bucket table mapping bead Effort Forecast Total turns + Confidence to initial cron cadences (short / medium / long buckets, confidence modulator). v7.1 implementation will pick up Effort-Forecast parsing at Step 2.
+- **Cron telemetry field (fdev-lbq.6)** — REFERENCE.md Dispatch File YAML Schema adds the `cron_telemetry: {}` field with the per-cron `{fires, silent, useful}` schema. /falcon retro will read this in v7.1 to emit a "Cron Telemetry" subsection for empirical adaptive-cadence calibration.
+
 ### settings.local.json detection (fdev-lbq.26)
 
 Falcon's environment-detection logic (PROTOCOL.md Step 2 §"Mode selection + detection", step 3) previously consulted only `.claude/settings.json` (project) and `~/.claude/settings.json` (user) for the `disableAgentView` knob. It ignored the `.local.json` siblings, which are Claude Code's documented location for machine-specific overrides (gitignored conventionally). Operators setting `disableAgentView: true` in `.claude/settings.local.json` were surprised to see falcon try `--bg` anyway.

@@ -53,7 +53,7 @@ The natural unit for confirmation is the **request**, not the commit or push. In
 
 ### Post-PR updates (full template re-review)
 
-When the user approves a post-PR update, do a **full review of `.github/PULL_REQUEST_TEMPLATE.md` against cumulative work-since-PR**, not just an append:
+When the user approves a post-PR update, do a **full review of `.claude/docs/PULL_REQUEST_TEMPLATE.md` against cumulative work-since-PR**, not just an append:
 
 1. Re-read the PR template.
 2. Re-read the current PR (`gh pr view <num> --json title,body`).
