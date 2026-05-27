@@ -494,6 +494,31 @@ After stash, run `git fetch origin && git log origin/<branch> --oneline -5` so t
 
 **Auto-release (default path):** if the safe-to-release predicate holds, release the lock here as part of stash. Glob `.claude/tmp/*.json`, parse each, find entry matching `<dispatch-id>`, remove from `falcon_dispatches[]`, write back. Update the dispatch file `session_status: complete`.
 
+**Agent-viewer row cleanup (v7.0.1, fdev-lbq.18):** after writing `session_status: complete` and clearing the lock registry, the agent-viewer row for the worker session should also be removed (otherwise dead rows accumulate in `claude agents` over multi-dispatch sessions). The right primitive is `claude rm <worker_bg_session_id>` — NOT `claude stop` (which only stops the process; row stays). Ordering is poll-then-rm to avoid losing the worker's final report write:
+
+```
+1. Write session_status: complete (above)
+2. Remove from falcon_dispatches[] lock registry (above)
+3. Poll the dispatch file for worker's final report fields (e.g.
+   worker_close_utc, implementation_results.falcon_report filled in)
+   up to TIMEOUT (default 30s; tunable per project in
+   .claude/rules/falcon-autopilot.md if needed)
+4. On poll success before TIMEOUT: invoke `claude rm <worker_bg_session_id>`
+5. On TIMEOUT: log a single warning ("worker did not write final report
+   within Ns; removing agent-viewer row anyway — investigate"), then
+   invoke `claude rm` regardless. Warning visibility is the operator's
+   signal that something on the worker side didn't terminate cleanly.
+6. If `claude rm` prints a worktree path (uncommitted changes preserved):
+   surface that path inline so the operator can clean up the worktree.
+```
+
+Skip the `claude rm` step in `--via-paste` / `--paste` modes — there's no `--bg` session row to remove. Skip ALSO if `worker_bg_session_id` is null (older dispatches predate this convention) — log a single-line "skipping claude rm; no worker_bg_session_id captured" and continue. Per-mode contract is captured in the cron Dispatch-Mode Conventions (REFERENCE.md).
+
+This applies to:
+- Step 4 auto-release (above)
+- `/falcon release <dispatch-id>` manual path (Step 5 below — same implementation)
+- `/wrapup` Task 0b orphan-release loop (sees the same primitive on each orphan it releases)
+
 **Hold-the-lock conditions** (Step 4 stashes the report but does NOT release):
 - An amendment is in `amendments[]` with non-terminal `status` (`pending` or `in_progress`)
 - A high-stakes DAR has `action_taken: stopped pending arbitration` with no recorded resolution

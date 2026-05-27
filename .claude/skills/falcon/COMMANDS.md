@@ -34,6 +34,8 @@ Manual lock release for a single dispatch. The normal path is **automatic** (Ste
 - A worker session abandoned its dispatch without returning a report
 - You want to release a lock that the auto-release path declined (e.g., a held DAR was resolved externally)
 
+**v7.0.1 agent-viewer row cleanup (fdev-lbq.18):** in `--bg` mode, `/falcon release` (and the Step 4 auto-release path) follows a poll-then-rm ordering: write `session_status: complete`, clear the lock registry, poll the dispatch file up to ~30s for the worker's final report write, then invoke `claude rm <worker_bg_session_id>` to remove the agent-viewer row. The `claude rm` primitive (NOT `claude stop`) is required because `stop` only stops the process; the row stays. The timeout knob is tunable per-project in `.claude/rules/falcon-autopilot.md`. If `claude rm` reports an uncommitted worktree, the path is surfaced inline for operator cleanup. See PROTOCOL.md `## Step 4 — Stash for Wrapup + Auto-Release` for the wiring.
+
 ---
 
 ### `/falcon release-session <session-id>` ✓

@@ -79,6 +79,24 @@ Plus the orthogonal Claude Code `claude respawn <id>` (CLI) — restart same ses
 
 Cross-references added to https://code.claude.com/docs/en/agent-view as the upstream source of truth.
 
+### `/falcon release` + `/wrapup` Task 0b now invoke `claude rm` to clear agent-viewer rows (fdev-lbq.18)
+
+Before this release, `/falcon release` and the Step 4 auto-release path cleaned up falcon-side state (lock registry, `session_status: complete`, stash archive) but did NOT remove the corresponding Claude Code agent-viewer row. Dead rows accumulated across multi-dispatch sessions until the supervisor's ~1hr auto-stop took them out (and even then, only for FINISHED sessions; sessions terminated abnormally could linger longer).
+
+This release adds a **poll-then-rm** ordering to Step 4 auto-release and `/falcon release`:
+
+1. Write `session_status: complete` and clear the lock registry (existing behavior).
+2. Poll the dispatch file for the worker's final report fields up to TIMEOUT (default 30s, tunable per-project).
+3. On poll success: invoke `claude rm <worker_bg_session_id>` to remove the agent-viewer row. Transcript remains preserved on disk via `claude --resume`.
+4. On TIMEOUT: log a single warning, then invoke `claude rm` anyway. Warning surfaces to operator for investigation.
+5. If `claude rm` reports an uncommitted worktree, surface the path inline.
+
+Skip `claude rm` in `--via-paste` / `--paste` modes (no agent-viewer row to remove) or when `worker_bg_session_id` is null (legacy dispatches).
+
+`/wrapup` Task 0b adds a post-release verification step that queries `claude agents --json` to confirm the row is gone; mismatches surface inline as warnings.
+
+Per fdev-lbq.8 docs: `claude rm` is the correct primitive here (NOT `claude stop`, which only stops the process but leaves the row).
+
 ## 7.0.0 (2026-05-26)
 
 **MAJOR bump — new default dispatch mode via Claude Code background sessions.** `/falcon work beads <spec>` (no mode flag) defaults to `--bg`: steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool, spawning a detached Claude Code background session observable via the `claude agents` UI. The prior paste-into-tab default is preserved as the renamed `--via-paste` flag for environments without agent-view OR users who prefer manual tab control. The cross-machine `--paste` mode is unchanged. The shift is motivated by ergonomic wins discovered in conversation 2026-05-25:

@@ -57,7 +57,16 @@ Run `/falcon list-locks` (or inline the equivalent: glob `.claude/tmp/*.json`, p
 
 This protects the next session from a HARD-reject on file_scope overlap when no real work is in progress.
 
+**Agent-viewer post-release check (v7.0.1, fdev-lbq.18):** in `--bg` mode, `/falcon release` follows a poll-then-rm ordering that ends with `claude rm <worker_bg_session_id>` to remove the dead row from `claude agents`. After releasing each orphan, verify the row is gone:
+
+```bash
+claude agents --json | jq -r ".[] | select(.sessionId == \"<worker_bg_session_id>\") | .sessionId"
+```
+
+If the query returns the session ID (row still present), either `claude rm` failed silently OR `worker_bg_session_id` was null on the dispatch file. Surface the inconsistency inline — don't block wrapup, but log a single-line warning.
+
 - **If no orphan locks:** mark completed with "No stale falcon locks."
+- **If orphan locks were released:** confirm post-release that `claude agents --json` shows no rows for the released session IDs. Note any mismatches inline.
 
 ---
 
