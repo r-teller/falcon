@@ -4,25 +4,23 @@ Purpose: High-level system context for quick orientation. Answers: "What is this
 
 > This is the first file a new session should read. Keep it to one page of essentials. Detailed domain docs (`backend.md`, `frontend.md`, `data-model.md`) go deeper.
 
-> **Theming note:** the example blocks in this file are populated for the fictitious "Asteroids: Wave Defense" project used as the worked example throughout this distribution. Replace each `<!-- theme example -->...<!-- /theme example -->` block with your project's actual values when adopting falcon.
+> **Theming note:** the `<!-- theme example -->...<!-- /theme example -->` blocks in this file describe THIS repo's current state — the Snake five-phase benchmark artifact at `examples/snake_opus.html` (Phase 1 shipped 2026-06-04; Phases 2–5 stubbed in beads). The blocks were updated in the wrapup pass on commit `40b35ad`'s successor. When adopting falcon for a different project, replace each block with that project's actual values.
 
 ---
 
 ## What We're Building
 
 <!-- theme example -->
-- **Project Name:** Asteroids: Wave Defense
-- **One-Sentence Summary:** A modern reimagining of the classic Asteroids arcade game with wave-based progression, between-wave power-up shop economy, online co-op, and replay leaderboards.
+- **Project Name:** Snake — Evolving Five-Phase Field Operation (benchmark artifact for cross-model PRD evaluation; one of several example PRDs in `examples/`)
+- **One-Sentence Summary:** A single-file browser Snake game styled as a field-ops patrol that escalates through five gated phases (Night Recon → Dawn Patrol → Ambush → Bunker Run → Sector Transfer), sharing one state machine, one persistent score, and one cohesive field-ops visual language.
 - **Programming Languages:**
-  - **Backend:** Python 3.12
-  - **Frontend:** TypeScript 5.x
+  - **Frontend (only):** Vanilla JavaScript (ES2020+) inline in HTML
 - **Main Frameworks/Tools:**
-  - **Backend:** FastAPI + SQLAlchemy + Alembic
-  - **Frontend:** React 19 + Vite + Tailwind
-  - **Auth:** Supabase Auth (Apple/Google/Steam OAuth)
-  - **Database:** PostgreSQL 16
-  - **Queue/Async:** Redis + ARQ (replay validation pipeline)
-  - **Storage:** S3 (replay artifacts + leaderboard archives)
+  - **Rendering:** HTML5 Canvas 2D, flat geometric primitives only
+  - **Game loop:** `requestAnimationFrame` + fixed-tick accumulator
+  - **Build:** None (single self-contained `.html` file; no transpiler, no bundler, no CDN)
+  - **Backend:** None — no server, no database, no network
+- **Other example PRDs in the repo:** `examples/asteroids_prd.md` (more complex full-stack worked example used as the worked theme throughout the rest of this distribution's stub blocks below)
 <!-- /theme example -->
 
 ---
@@ -32,15 +30,15 @@ Purpose: High-level system context for quick orientation. Answers: "What is this
 ### Vision
 
 <!-- theme example -->
-A modern Asteroids that respects the source material while layering a between-wave economy and authenticated leaderboards. Single-player first; co-op as a stretch goal. Wave-pack content is versioned so leaderboards stay fair across content updates.
+A self-contained, single-file browser Snake artifact built per `examples/snake_prd.md` as a benchmark for cross-model PRD-to-code evaluation. The aesthetic is field-ops / camouflage throughout; Phase 1 is grayscale night-recon, Phase 2+ unlocks the camo palette. Five gated phases stack mechanics on a single state machine — no jarring resets, no per-phase rewrites of physics. The benchmark goal: an adopter pastes `examples/snake_prd.md` §15 into N different coding models, names each output `snake_<model>.html`, and diffs the results.
 <!-- /theme example -->
 
 ### Product Principles
 
 <!-- theme example -->
-1. **Replay-first** — every leaderboard submission is a deterministic replay that re-runs against the canonical `wave_pack_version`. No replay = no score.
-2. **Fair-play by construction** — anti-cheat is structural (deterministic physics + server-side replay validation), not behavioral (signal-based detection).
-3. **Content versioning is contractual** — `wave_pack_version` bumps are scoreboard-breaking events. Old replays remain valid against old versions; new versions get new leaderboard tracks.
+1. **Single-file by construction** — the entire artifact is one `.html` file, inline HTML/CSS/JS, zero external dependencies. Verifiable by opening in any modern browser via double-click.
+2. **Persistence is core** — score, patrol length, direction, reinforcements, upgrades, held bonuses all persist across phase gates. Only the world layer changes; the patrol is one entity through all five phases.
+3. **Field-ops aesthetic is non-negotiable** — muted earth-tones (olive drab, coyote brown, tan, dark green, black) throughout. No neon, no saturated arcade hues, ever. Phase 1's grayscale is the only palette swap and it lifts at the Phase 2 gate as "dawn breaks."
 <!-- /theme example -->
 
 ### Explicit Exclusions
@@ -48,9 +46,11 @@ A modern Asteroids that respects the source material while layering a between-wa
 | Excluded Feature | Rationale | Status |
 |-----------------|-----------|--------|
 <!-- theme example -->
-| Pay-to-win cosmetics | Damages the fair-play principle | Permanent |
-| Mobile-touch input | UX trade-off — keyboard/gamepad first | Deferred |
-| User-generated wave packs | Out of MVP scope; requires moderation tooling | Deferred |
+| Backend / leaderboards / multiplayer | Violates single-file no-network constraint | Permanent |
+| Audio / image assets | Cannot ship a separate `.wav` / `.mp3` / `.png` under the no-external-deps rule | Permanent |
+| Mobile-touch input | Keyboard-first design (Arrows + WASD + P/Esc + R/Space + Shift); touch is a different UX problem | Deferred |
+| Save / resume between sessions | Stateless by design; localStorage adds complexity for no benchmark value | Deferred |
+| Full list of exclusions | See `examples/snake_prd.md` §17 — 16 explicit exclusions documented | — |
 <!-- /theme example -->
 
 ### Target Personas
@@ -58,9 +58,10 @@ A modern Asteroids that respects the source material while layering a between-wa
 | Persona | Description | Priority |
 |---------|-------------|----------|
 <!-- theme example -->
-| Player (end-user) | Plays for high scores, replays favorite waves | Primary |
-| Leaderboard integrator (api-consumer) | Builds 3rd-party Twitch/Discord bots reading leaderboards | Secondary |
-| Server operator (administrator) | Runs the replay-validator + leaderboard service | Secondary |
+| Player (end-user) | Plays the finished HTML file by double-click; wants familiar Snake feel + earned phase progression + no unfair deaths | Primary |
+| Implementing Agent (coding model) | Builds from `examples/snake_prd.md` §15; wants enough specificity to build without guessing + enough latitude on visuals/tuning to express judgment | Primary |
+| Adopter / Benchmark Operator | Runs the same PRD across multiple models; wants a repeatable prompt (§15) + consistent artifact name (§14) so outputs are diff-able | Secondary |
+| Reviewer | Scores each model's artifact; wants AC (§13 and §5.5/§6.6/§7.6/§8.7/§9.9) phrased as checklist items a human tester can verify in one pass | Secondary |
 <!-- /theme example -->
 
 ---
@@ -72,15 +73,15 @@ Before adding a new library, check this table — the problem may already be sol
 | Category | Component | Version | Rationale |
 |----------|-----------|---------|-----------|
 <!-- theme example -->
-| **Language** | Python | 3.12 | Replay-validator + scoring service |
-| **Language** | TypeScript | 5.x | Renderer + HUD + shop UI |
-| **Runtime** | Node.js | 22.x | Frontend tooling |
-| **Framework** | FastAPI | 0.115 | Leaderboard API |
-| **Database** | PostgreSQL | 16 | Leaderboards + user accounts |
-| **ORM** | SQLAlchemy | 2.0 | Type-safe queries |
-| **UI Library** | React | 19 | HUD + shop panels |
-| **Styling** | Tailwind | 3.4 | Quick utility-first styling |
-| **Physics** | Custom (deterministic) | — | Required for replay reproducibility |
+| **Language** | JavaScript (ES2020+) | — | Inline in `examples/snake_opus.html`; no transpile step |
+| **Rendering** | HTML5 Canvas 2D | (browser) | Flat geometric primitives (rect / line / circle); no sprites, no SVG |
+| **Game loop** | `requestAnimationFrame` + fixed-tick accumulator | — | Decouples render rate from game tick; smooth at any monitor refresh |
+| **Input** | DOM `keydown` on `window` | — | Arrows + WASD; reversal-protection rejects opposite-of-current heading |
+| **HUD** | DOM overlay (`pointer-events: none`) | — | Score/phase/reinforcements/bonus rendered outside the canvas for cheap text updates |
+| **Build tooling** | None | — | Single self-contained file by design (per `examples/snake_prd.md` §13.1) |
+| **Backend / DB / queue / network** | None | — | All forbidden by single-file constraint |
+| **Tooling (meta-repo)** | bd (beads) | 1.0.3 | Issue/work-item tracking; database in `.beads/` |
+| **Tooling (meta-repo)** | falcon skill | 7.2.0 | Remote bead dispatch; rules in `.claude/skills/falcon/` + autopilot config at `.claude/rules/falcon-autopilot.md` |
 <!-- /theme example -->
 
 > **Update strategy:** Dependencies are updated manually. Before updating a major version, test the application. Run `npm audit` / `pip audit` periodically for security vulnerabilities.
@@ -92,29 +93,44 @@ Before adding a new library, check this table — the problem may already be sol
 ### Prerequisites
 
 <!-- theme example -->
-- Docker, Node.js 22+, Python 3.12+
+- A modern browser (Chrome / Edge / Firefox / Safari) — that's it.
+- For working on the beads / falcon tooling itself: `bd` 1.0.3+ on PATH, Node.js (only used opportunistically for `node --check` JS syntax validation of the artifact), Python 3 (for ad-hoc YAML validation).
 <!-- /theme example -->
 
 ### Local Development
 
 <!-- theme example -->
+There is no dev server. To run the artifact:
+
 ```bash
-# Install deps
-npm install && cd backend && pip install -r requirements.txt
-
-# Start services
-docker-compose up -d  # postgres + redis + minio
-
-# Start backend (leaderboard + replay-validator)
-cd backend && uvicorn app.main:app --reload --port 8000
-
-# Start frontend
-cd frontend && npm run dev
+# macOS
+open examples/snake_opus.html
+# Linux
+xdg-open examples/snake_opus.html
+# Or just double-click it in a file manager.
 ```
 
-- **Backend:** http://localhost:8000
-- **Frontend:** http://localhost:5173
-- **API Docs:** http://localhost:8000/docs
+To work on the bead structure / refinement:
+
+```bash
+bd ready          # find unblocked work
+bd show <id>      # read a bead body
+bd update <id> --body-file <body.md>    # apply a refinement
+bd close <id> -r "<reason>"             # close when verified
+bd export -o .beads/issues.jsonl        # flush to canonical jsonl
+```
+
+To validate the artifact statically (no browser surface available):
+
+```bash
+# Extract <script> body and node-check it for syntax errors
+awk '/<script>/{flag=1;next}/<\/script>/{flag=0}flag' examples/snake_opus.html > /tmp/snake_js.js \
+  && node --check /tmp/snake_js.js
+
+# No-external-deps audit
+grep -Ein 'src=|href=|@import|<link|cdn|http://|https://' examples/snake_opus.html
+# Expected: 0 matches.
+```
 <!-- /theme example -->
 
 ### Environment Health Checks
@@ -124,11 +140,11 @@ Used by `/leroy` to verify the dev environment is ready. Update this table when 
 | Service | Check Command | Expected |
 |---------|--------------|----------|
 <!-- theme example -->
-| Backend | `curl -s http://localhost:8000/health` | `{"status": "healthy"}` |
-| Frontend | `curl -s http://localhost:5173 >/dev/null && echo "running"` | `running` |
-| Database | `docker ps --format "{{.Names}} {{.Status}}" \| grep postgres` | `Up ... (healthy)` |
-| Redis | `docker ps --format "{{.Names}} {{.Status}}" \| grep redis` | `Up ... (healthy)` |
-| .env | `test -f backend/.env && echo "exists"` | `exists` |
+| Artifact file | `test -f examples/snake_opus.html && echo "exists"` | `exists` |
+| JS syntax | `awk '/<script>/{f=1;next}/<\/script>/{f=0}f' examples/snake_opus.html > /tmp/_s.js && node --check /tmp/_s.js` | (no error output) |
+| No external deps | `grep -cEin 'src=\|href=\|@import\|<link\|cdn\|http://\|https://' examples/snake_opus.html` | `0` |
+| bd workspace | `bd where 2>&1 \| head -1` | (path under `.beads/`) |
+| bd canonical jsonl | `test -f .beads/issues.jsonl && echo "exists"` | `exists` |
 <!-- /theme example -->
 
 ---
@@ -137,25 +153,44 @@ Used by `/leroy` to verify the dev environment is ready. Update this table when 
 
 <!-- theme example -->
 ```
-┌──────────────┐    ┌──────────────────┐    ┌──────────────┐
-│  Renderer    │───▶│  Leaderboard API │───▶│  PostgreSQL  │
-│  (TS/React)  │    │  (FastAPI)       │    │              │
-└──────────────┘    └────────┬─────────┘    └──────────────┘
-                             │
-                    ┌────────▼─────────┐    ┌──────────────┐
-                    │ Replay Validator │───▶│  S3 (MinIO)  │
-                    │ (ARQ workers)    │    │  replay/*    │
-                    └──────────────────┘    └──────────────┘
+┌─────────────────────── examples/snake_opus.html ────────────────────────┐
+│                                                                          │
+│  ┌─── DOM layer ───────────────────────────────────────────────────┐    │
+│  │  #stage > #game (canvas 640×480)  +  #hud-* overlays            │    │
+│  │  #overlay-pause  +  #overlay-lost  +  #banner                    │    │
+│  └────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌─── inline <script> (single IIFE) ───────────────────────────────┐    │
+│  │  state {phase, score, patrol, supplyCache, runState, paused, …} │    │
+│  │  loop(ts)                                                       │    │
+│  │   ├── render: ctx clear → grid → cache → patrol                 │    │
+│  │   └── advance tick @ 1000/tickRate ms while runState==='playing'│    │
+│  │        ├── patrolStep() → checkCollisions() → losePatrol() ?    │    │
+│  │        └── pickup check → score++ / grow → checkPhaseGates()    │    │
+│  │                                                                  │    │
+│  │  Phase-branched helpers (extend each phase):                    │    │
+│  │   palette()           — colour set per state.phase               │    │
+│  │   recomputeTickRate() — speed ramp formula per state.phase       │    │
+│  │   transitionToPhase() — gate handler reused by P1→2, P2→3, …     │    │
+│  └────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│   ▲ keydown on window: arrows/WASD → pendingDirection                   │
+│                       P/Esc → state.paused                              │
+│                       R/Space (only at PATROL LOST) → redeploy()        │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+   No backend. No DB. No network. No bundler. No build step. One file.
 ```
 
-Subsystems map to top-level directories:
+The "subsystems" in this artifact are not directories — they are PRD phases that stack on a shared state machine:
 
-- `physics-engine/` — deterministic collision + velocity
-- `renderer/` — vector graphics, HUD
-- `wave-spawner/` — procedural waves per `wave_pack_version`
-- `score-tracker/` — wave scoring + leaderboard sync
-- `replay-validator/` — replay verification pipeline
-- `power-up-shop/` — between-wave shop economy
+- **Phase 1 — Night Recon (§5):** grayscale palette, score 0→50, supply caches only
+- **Phase 2 — Dawn Patrol (§6):** camo palette, field rations, Scavenger Training upgrade, score multiplier — gate at 150
+- **Phase 3 — Ambush (§7):** hostile sweep events with telegraph + Cover bonus — gate at 350
+- **Phase 4 — Bunker Run (§8):** static bunker obstacles with flood-fill connectivity + sprint boost — gate at 700
+- **Phase 5 — Sector Transfer (§9):** open-ended sector progression via wormholes, escalating tempo + bunker density
+
+Phase 1 is implemented as of 2026-06-04 (commit `328d642`). Phases 2–5 are stubbed in beads (SNAKE-8ik.*, -pi2.*, -juy.*, -401.*) — see `bd ready` for next available work.
 <!-- /theme example -->
 
 ---
@@ -164,17 +199,28 @@ Subsystems map to top-level directories:
 
 <!-- theme example -->
 ```
-asteroid-wave-defense/
-├── physics-engine/          # collision, velocity, broadphase
-├── renderer/                # vector renderer + HUD + shop panel
-├── wave-spawner/            # procedural wave generation
-├── score-tracker/           # scoring + leaderboard sync
-│   └── waves/               # wave-pack YAML manifests
-├── replay-validator/        # ARQ workers; replay re-run pipeline
-├── power-up-shop/           # daily-deal rotation, purchases
-├── docs/
-│   └── level-designs/       # wave-pack source + sample replays
-└── .claude/                 # this directory
+falcon/
+├── examples/
+│   ├── snake_prd.md         # canonical Snake PRD (the input to the benchmark)
+│   ├── snake_opus.html      # this session's Snake artifact (Phase 1 shipped, Phase 2-5 in beads)
+│   └── asteroids_prd.md     # second example PRD (no implementation yet)
+├── .beads/                  # bd workspace (Dolt-backed)
+│   ├── issues.jsonl         # canonical bead snapshot — committed
+│   ├── bodies/*.md          # per-bead template-body sources (FN-01..FN-08, P1-*, P2-*)
+│   ├── id_map.txt           # logical-id ↔ bd-id mapping
+│   └── _*.sh                # single-use bead-setup scripts (UNTRACKED)
+├── .claude/
+│   ├── skills/falcon/       # falcon skill source (SKILL.md, COMMANDS.md, PROTOCOL.md, …)
+│   ├── rules/               # workflow / planning / execution / autopilot rules
+│   ├── docs/                # work-item templates, schemas
+│   ├── architecture.md      # this file
+│   ├── backend.md, frontend.md, data-model.md, tests.md, security.md, enhancements.md
+│   ├── changelog.yaml
+│   ├── handoff.yaml
+│   └── standards-history.md
+├── README.md
+├── AGENTS.md                # bd-init-generated; pointer to bd prime
+└── CLAUDE.md                # bd-init-generated; project instructions
 ```
 <!-- /theme example -->
 
@@ -183,10 +229,9 @@ asteroid-wave-defense/
 ## Deployment
 
 <!-- theme example -->
-- **Hosting:** GCP (Cloud Run for API, GKE for replay-validator workers)
-- **CI/CD:** GitHub Actions
-- **Environments:** local · staging · production
-- **Secrets:** GCP Secret Manager (production) · `.env` files (local, gitignored)
+- **Hosting:** None — the artifact runs locally by opening the `.html` file in a browser. There is no server, no service, no environment.
+- **Distribution:** The artifact + its PRD travel as files in this repo. An adopter copies `examples/snake_prd.md` §15 into a coding model, names the output per §14 (`snake_<model>.html`), and diffs against the canonical `examples/snake_opus.html`.
+- **Local-only commit constraint (this branch):** session-scoped — `feature/work-20260603-2200-local-changes` does NOT push to a remote. See `.claude/handoff.yaml` for the durable note.
 <!-- /theme example -->
 
 ---
