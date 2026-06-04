@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snake — Five-Phase Field Operation (Phase 1)</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #1a1c16;
+    color: #e5e0c8;
+    font-family: 'Courier New', Courier, monospace;
+    overflow: hidden;
+  }
+  .stage {
+    position: relative;
+    margin: 24px auto;
+    width: 640px;
+    height: 480px;
+    padding: 0;
+    border: 2px solid #4a4632;
+    box-shadow: 0 0 18px rgba(0,0,0,0.5);
+  }
+  canvas {
+    display: block;
+    width: 640px;
+    height: 480px;
+    background: #0e0e0e;
+  }
+  .hud {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    color: #e5e0c8;
+    font-family: 'Courier New', Courier, monospace;
+    text-shadow: 0 0 4px rgba(0,0,0,0.9);
+  }
+  .hud-score { position: absolute; top: 8px;  left: 12px;  font-size: 14px; letter-spacing: 1px; }
+  .hud-phase { position: absolute; top: 8px;  left: 0;     right: 0; text-align: center; font-size: 13px; letter-spacing: 2px; }
+  .hud-reinf { position: absolute; top: 8px;  right: 12px; font-size: 14px; letter-spacing: 2px; display: flex; gap: 4px; }
+  .hud-bonus { position: absolute; top: 28px; left: 0;     right: 0; text-align: center; font-size: 12px; opacity: 0.85; }
+  .reinf-mark { display: inline-block; }
+
+  .overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    background: rgba(0,0,0,0.55);
+    color: #e5e0c8;
+    font-family: 'Courier New', Courier, monospace;
+    pointer-events: none;
+  }
+  .overlay.visible { display: flex; }
+  .overlay .head { font-size: 26px; letter-spacing: 4px; margin-bottom: 12px; }
+  .overlay .line { font-size: 14px; letter-spacing: 1px; margin: 2px 0; }
+  .overlay .foot { font-size: 13px; letter-spacing: 2px; margin-top: 14px; opacity: 0.85; }
+
+  .pause-overlay .head { font-size: 22px; letter-spacing: 3px; }
+
+  .banner {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 22px;
+    letter-spacing: 4px;
+    color: #e5e0c8;
+    text-shadow: 0 0 6px rgba(0,0,0,0.9);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 300ms ease;
+  }
+  .banner.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <canvas id="game" width="640" height="480"></canvas>
+  <div class="hud">
+    <div class="hud-score" id="hud-score">SCORE 0</div>
+    <div class="hud-phase" id="hud-phase">PHASE 1: NIGHT RECON</div>
+    <div class="hud-reinf" id="hud-reinf"></div>
+    <div class="hud-bonus" id="hud-bonus"></div>
+  </div>
+  <div class="overlay pause-overlay" id="overlay-pause">
+    <div class="head">HOLD POSITION</div>
+    <div class="line">Press P or Esc to resume</div>
+  </div>
+  <div class="overlay" id="overlay-lost">
+    <div class="head" id="lost-head">PATROL LOST</div>
+    <div class="line" id="lost-score">Final Score: 0</div>
+    <div class="line" id="lost-phase">Phase reached: 1</div>
+    <div class="foot">Press R to redeploy</div>
+  </div>
+  <div class="banner" id="banner"></div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ===== Constants (PRD §3.15, §3.16) =====
+  const GRID_W = 32, GRID_H = 24, CELL = 20;
+  const CANVAS_W = GRID_W * CELL, CANVAS_H = GRID_H * CELL;
+  const BASE_TICK_RATE = 6;             // cells/sec at Phase 1 start (§3.16)
+  const PHASE1_GATE_SCORE = 50;         // (§3.1, §8.1)
+  const MAX_DT_PER_FRAME = 250;         // ms — caps catch-up after tab visibility loss
+
+  // ===== Canonical run-end copy (PRD §3.21, §13.5) =====
+  const COPY_LOST_HEAD       = 'PATROL LOST';
+  const COPY_LOST_REDEPLOY   = 'Press R to redeploy';
+
+  // ===== Canvas + DOM handles =====
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const hudScore = document.getElementById('hud-score');
+  const hudPhase = document.getElementById('hud-phase');
+  const hudReinf = document.getElementById('hud-reinf');
+  const overlayPause = document.getElementById('overlay-pause');
+  const overlayLost  = document.getElementById('overlay-lost');
+  const lostHead  = document.getElementById('lost-head');
+  const lostScore = document.getElementById('lost-score');
+  const lostPhase = document.getElementById('lost-phase');
+  const bannerEl  = document.getElementById('banner');
+
+  // ===== Run state (FN-02, FN-04, FN-08) =====
+  const state = {
+    phase: 1,
+    phaseName: 'PHASE 1: NIGHT RECON',
+    score: 0,
+    reinforcements: 0,
+    tickRate: BASE_TICK_RATE,
+    patrol: {
+      segments: [],            // [{x,y}], head at index 0
+      currentDirection: 'right',
+      pendingDirection: null,
+      pendingGrowth: 0,
+    },
+    supplyCache: null,         // {x,y} or null
+    runState: 'awaiting_first_input',  // 'awaiting_first_input' | 'playing' | 'patrol_lost'
+    paused: false,
+    firstInputReceived: false,
+    lastFrameTs: 0,
+    tickAccumulator: 0,
+    midAmbushCut: false,       // P2-03 hook for later P3 work
+    scavengerActive: false,    // becomes true on Phase 2 entry (P2-03)
+  };
+
+  // ===== Palette (P1-01, extends in P2-01) =====
+  function palette() {
+    if (state.phase >= 2) {
+      // Phase 2+ camo palette per PRD §6.2 (placeholder — full styling lands in P2-01).
+      return {
+        bg:          '#2b2d24',
+        gridline:    'rgba(53,55,39,0.6)',   // #353727
+        bodyTones:   ['#556b2f', '#c2b280', '#8b6f47', '#1a1a14'],
+        head:        '#3b4a1f',
+        headAccent:  '#1a1a14',
+        cacheFill:   '#c2b280',
+        cacheStroke: '#4a3823',
+      };
+    }
+    // Phase 1 grayscale night-recon (§5.2)
+    return {
+      bg:          '#0e0e0e',
+      gridline:    'rgba(180,180,180,0.10)',
+      bodyTones:   ['#999999'],            // single tone in Phase 1
+      head:        '#cccccc',
+      headAccent:  '#000000',
+      cacheFill:   '#3a3a3a',
+      cacheStroke: '#5a5a5a',
+    };
+  }
+
+  // ===== Tick rate (P1-03, extends in P5-03) =====
+  function recomputeTickRate() {
+    // Phase 1: 6 → 8 across score 0..50 (§3.16). Other phases TBD.
+    if (state.phase === 1) {
+      state.tickRate = Math.min(BASE_TICK_RATE + Math.floor(state.score / 25), 8);
+    } else {
+      // Same in-phase ramp formula re-baselining from each phase's score floor.
+      // For Phase 2 (gate at 50): rampScore = state.score - 50.
+      const floors = { 2: 50, 3: 150, 4: 350, 5: 700 };
+      const floor = floors[state.phase] ?? 0;
+      const rampScore = Math.max(0, state.score - floor);
+      state.tickRate = Math.min(BASE_TICK_RATE + Math.floor(rampScore / 25), 8);
+    }
+  }
+
+  // ===== Patrol model (FN-04) =====
+  function patrolReset() {
+    const cx = Math.floor(GRID_W / 2), cy = Math.floor(GRID_H / 2);
+    state.patrol.segments = [
+      { x: cx,     y: cy },     // head
+      { x: cx - 1, y: cy },
+      { x: cx - 2, y: cy },
+    ];
+    state.patrol.currentDirection = 'right';
+    state.patrol.pendingDirection = null;
+    state.patrol.pendingGrowth = 0;
+  }
+
+  function patrolGrow(n) { state.patrol.pendingGrowth += n; }
+
+  function patrolStep() {
+    const next = state.patrol.pendingDirection ?? state.patrol.currentDirection;
+    // Reject opposites at apply time too, as a belt-and-braces (input handler already rejects).
+    if (isOpposite(next, state.patrol.currentDirection)) {
+      // skip the direction change but still step in current direction
+    } else {
+      state.patrol.currentDirection = next;
+    }
+    state.patrol.pendingDirection = null;
+
+    const head = state.patrol.segments[0];
+    const dx = state.patrol.currentDirection === 'left'  ? -1 :
+               state.patrol.currentDirection === 'right' ?  1 : 0;
+    const dy = state.patrol.currentDirection === 'up'    ? -1 :
+               state.patrol.currentDirection === 'down'  ?  1 : 0;
+    const newHead = { x: head.x + dx, y: head.y + dy };
+
+    state.patrol.segments.unshift(newHead);
+    if (state.patrol.pendingGrowth > 0) {
+      state.patrol.pendingGrowth -= 1;
+    } else {
+      state.patrol.segments.pop();
+    }
+  }
+
+  function isOpposite(a, b) {
+    return (a === 'up'    && b === 'down')
+        || (a === 'down'  && b === 'up')
+        || (a === 'left'  && b === 'right')
+        || (a === 'right' && b === 'left');
+  }
+
+  // ===== Supply cache (FN-05) =====
+  function patrolOccupies(x, y) {
+    for (let i = 0; i < state.patrol.segments.length; i++) {
+      if (state.patrol.segments[i].x === x && state.patrol.segments[i].y === y) return true;
+    }
+    return false;
+  }
+
+  function spawnSupplyCache() {
+    for (let attempts = 0; attempts < 200; attempts++) {
+      const x = Math.floor(Math.random() * GRID_W);
+      const y = Math.floor(Math.random() * GRID_H);
+      if (!patrolOccupies(x, y)) {
+        state.supplyCache = { x, y };
+        return;
+      }
+    }
+    // Fallback: linear scan for any empty cell (vanishingly rare).
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        if (!patrolOccupies(x, y)) { state.supplyCache = { x, y }; return; }
+      }
+    }
+    state.supplyCache = null; // board completely full (Phase 5 win condition — out of scope here)
+  }
+
+  // ===== Collisions (P1-02) =====
+  function checkCollisions() {
+    const head = state.patrol.segments[0];
+    if (head.x < 0 || head.x >= GRID_W || head.y < 0 || head.y >= GRID_H) return 'wall';
+    for (let i = 1; i < state.patrol.segments.length; i++) {
+      if (state.patrol.segments[i].x === head.x && state.patrol.segments[i].y === head.y) return 'self';
+    }
+    return null;
+  }
+
+  // ===== Phase gates (P1-04, extends in P2-05, P3-07, P4-07) =====
+  function transitionToPhase(n, displayName) {
+    state.phase = n;
+    state.phaseName = displayName;
+    if (n === 2) state.scavengerActive = true;   // P2-03 hook
+    recomputeTickRate();
+    showBanner(displayName);
+  }
+
+  function checkPhaseGates() {
+    if (state.phase === 1 && state.score >= PHASE1_GATE_SCORE) {
+      transitionToPhase(2, 'PHASE 2: DAWN PATROL');
+    }
+    // Phase 2 → 3 (score 150): P2-05
+    // Phase 3 → 4 (score 350): P3-07
+    // Phase 4 → 5 (score 700): P4-07
+  }
+
+  // ===== Banner (P1-04 local; FIN-01 generalizes) =====
+  let bannerTimer = 0;
+  function showBanner(text) {
+    bannerEl.textContent = text;
+    bannerEl.classList.add('show');
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(() => { bannerEl.classList.remove('show'); }, 2000);
+  }
+
+  // ===== HUD render (FN-06) =====
+  function renderHud() {
+    hudScore.textContent = 'SCORE ' + state.score;
+    hudPhase.textContent = state.phaseName;
+
+    // Reinforcements (FN-06 placeholder; FIN-02 populates on pickup).
+    const wanted = state.reinforcements;
+    while (hudReinf.childElementCount < wanted) {
+      const m = document.createElement('span');
+      m.className = 'reinf-mark';
+      m.textContent = '▼'; // ▼ chevron
+      hudReinf.appendChild(m);
+    }
+    while (hudReinf.childElementCount > wanted) {
+      hudReinf.removeChild(hudReinf.lastChild);
+    }
+
+    overlayPause.classList.toggle('visible', state.paused);
+    overlayLost.classList.toggle('visible', state.runState === 'patrol_lost');
+  }
+
+  // ===== Render (FN-01, P1-01) =====
+  function renderFrame() {
+    const p = palette();
+
+    ctx.fillStyle = p.bg;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Gridlines
+    ctx.strokeStyle = p.gridline;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= GRID_W; x++) {
+      ctx.moveTo(x * CELL + 0.5, 0);
+      ctx.lineTo(x * CELL + 0.5, CANVAS_H);
+    }
+    for (let y = 0; y <= GRID_H; y++) {
+      ctx.moveTo(0, y * CELL + 0.5);
+      ctx.lineTo(CANVAS_W, y * CELL + 0.5);
+    }
+    ctx.stroke();
+
+    // Supply cache
+    if (state.supplyCache) {
+      const c = state.supplyCache;
+      ctx.fillStyle = p.cacheFill;
+      ctx.fillRect(c.x * CELL + 2, c.y * CELL + 2, CELL - 4, CELL - 4);
+      ctx.strokeStyle = p.cacheStroke;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(c.x * CELL + 2.5, c.y * CELL + 2.5, CELL - 5, CELL - 5);
+      // Phase 2+ crate-strap accent
+      if (state.phase >= 2) {
+        ctx.fillStyle = p.cacheStroke;
+        ctx.fillRect(c.x * CELL + 3, c.y * CELL + CELL / 2 - 1, CELL - 6, 1);
+      }
+    }
+
+    // Patrol
+    const segs = state.patrol.segments;
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i];
+      if (i === 0) {
+        // head
+        ctx.fillStyle = p.head;
+        ctx.fillRect(s.x * CELL + 1, s.y * CELL + 1, CELL - 2, CELL - 2);
+        // directional notch / eye
+        ctx.fillStyle = p.headAccent;
+        const dir = state.patrol.currentDirection;
+        const cx = s.x * CELL + CELL / 2;
+        const cy = s.y * CELL + CELL / 2;
+        const off = 5;
+        if (dir === 'right')      ctx.fillRect(cx + off - 2, cy - 2, 3, 3);
+        else if (dir === 'left')  ctx.fillRect(cx - off - 1, cy - 2, 3, 3);
+        else if (dir === 'up')    ctx.fillRect(cx - 2, cy - off - 1, 3, 3);
+        else                       ctx.fillRect(cx - 2, cy + off - 2, 3, 3);
+      } else {
+        // body — alternating tone for blocky-camo at Phase 2+
+        ctx.fillStyle = p.bodyTones[i % p.bodyTones.length];
+        ctx.fillRect(s.x * CELL + 2, s.y * CELL + 2, CELL - 4, CELL - 4);
+      }
+    }
+  }
+
+  // ===== Game tick (FN-02, FN-04, FN-05, P1-02, P1-04) =====
+  function tick() {
+    if (state.runState !== 'playing') return;
+    patrolStep();
+    const hit = checkCollisions();
+    if (hit) { losePatrol(); return; }
+
+    // Supply cache pickup
+    const head = state.patrol.segments[0];
+    if (state.supplyCache && head.x === state.supplyCache.x && head.y === state.supplyCache.y) {
+      state.score += 1;
+      patrolGrow(1);
+      recomputeTickRate();
+      checkPhaseGates();
+      spawnSupplyCache();
+    }
+  }
+
+  // ===== Loss + redeploy (FN-08, FIN-03 will extend with reinforcements) =====
+  function losePatrol() {
+    // FIN-03 will consume a reinforcement here if any remain (Phase 5 respawn semantics in P5-08).
+    state.runState = 'patrol_lost';
+    lostHead.textContent = COPY_LOST_HEAD;
+    lostScore.textContent = 'Final Score: ' + state.score;
+    lostPhase.textContent = 'Phase reached: ' + state.phase;
+    // Sector display for Phase 5 will be added by P5-08 / FIN-03.
+  }
+
+  function redeploy() {
+    state.phase = 1;
+    state.phaseName = 'PHASE 1: NIGHT RECON';
+    state.score = 0;
+    state.reinforcements = 0;
+    state.tickRate = BASE_TICK_RATE;
+    state.runState = 'awaiting_first_input';
+    state.firstInputReceived = false;
+    state.paused = false;
+    state.scavengerActive = false;
+    patrolReset();
+    spawnSupplyCache();
+    bannerEl.classList.remove('show');
+  }
+
+  // ===== Input (FN-03, FN-07, FN-08) =====
+  const DIR_KEYS = {
+    'ArrowUp': 'up', 'KeyW': 'up',
+    'ArrowDown': 'down', 'KeyS': 'down',
+    'ArrowLeft': 'left', 'KeyA': 'left',
+    'ArrowRight': 'right', 'KeyD': 'right',
+  };
+
+  window.addEventListener('keydown', (e) => {
+    // Allow PATROL LOST redeploy via R or Space (only on the lost screen) — FN-08, §3.23
+    if (state.runState === 'patrol_lost') {
+      if (e.code === 'KeyR' || e.code === 'Space') {
+        e.preventDefault();
+        redeploy();
+      }
+      return;
+    }
+
+    // Pause toggle (FN-07, §3.22)
+    if (e.code === 'KeyP' || e.code === 'Escape') {
+      e.preventDefault();
+      state.paused = !state.paused;
+      return;
+    }
+
+    // Direction inputs (FN-03)
+    const dir = DIR_KEYS[e.code];
+    if (dir) {
+      e.preventDefault();
+      // Reject direct opposite of current heading (§3.18)
+      if (!isOpposite(dir, state.patrol.currentDirection)) {
+        state.patrol.pendingDirection = dir;
+        if (!state.firstInputReceived) {
+          state.firstInputReceived = true;
+          if (state.runState === 'awaiting_first_input') state.runState = 'playing';
+        }
+      }
+    }
+    // Shift (sprint) and other keys are stubs for later phases.
+  });
+
+  // ===== Main loop (FN-02) =====
+  function loop(ts) {
+    if (state.lastFrameTs === 0) state.lastFrameTs = ts;
+    let dt = ts - state.lastFrameTs;
+    state.lastFrameTs = ts;
+    if (dt > MAX_DT_PER_FRAME) dt = MAX_DT_PER_FRAME;
+
+    if (!state.paused && state.runState !== 'patrol_lost') {
+      // On respawn / phase transition, Phase 1 still waits for first input (§3.39).
+      const advancing = state.runState === 'playing';
+      if (advancing) {
+        state.tickAccumulator += dt;
+        const tickInterval = 1000 / state.tickRate;
+        // Guard against zero / very small intervals.
+        let safety = 100;
+        while (state.tickAccumulator >= tickInterval && safety-- > 0) {
+          tick();
+          state.tickAccumulator -= tickInterval;
+          if (state.runState !== 'playing') break;
+        }
+      }
+    }
+
+    renderFrame();
+    renderHud();
+    requestAnimationFrame(loop);
+  }
+
+  // ===== Boot =====
+  patrolReset();
+  spawnSupplyCache();
+  recomputeTickRate();
+  renderFrame();
+  renderHud();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

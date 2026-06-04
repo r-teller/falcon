@@ -1,0 +1,59 @@
+EP-01	SNAKE-i0w	Epic: Foundation
+EP-02	SNAKE-egj	Epic: Phase 1 — Night Recon
+EP-03	SNAKE-8ik	Epic: Phase 2 — Dawn Patrol
+EP-04	SNAKE-pi2	Epic: Phase 3 — Ambush
+EP-05	SNAKE-juy	Epic: Phase 4 — Bunker Run
+EP-06	SNAKE-401	Epic: Phase 5 — Sector Transfer
+EP-07	SNAKE-auz	Epic: Polish & Ship
+FN-01	SNAKE-i0w.1	FN-01: Bootstrap single-file HTML scaffold + canvas + HUD shell (panel/border frame)
+FN-02	SNAKE-i0w.2	FN-02: Game loop and tick clock (pausable)
+FN-03	SNAKE-i0w.3	FN-03: Input handler (arrows + WASD + direction reversal protection)
+FN-04	SNAKE-i0w.4	FN-04: Patrol data model (segments, head, growth, length math)
+FN-05	SNAKE-i0w.5	FN-05: Supply cache spawn (rejection sampling against patrol)
+FN-06	SNAKE-i0w.6	FN-06: HUD renderer (score, reinforcements, phase, held-bonus icons)
+FN-07	SNAKE-i0w.7	FN-07: HOLD POSITION overlay + P/Esc toggle
+FN-08	SNAKE-i0w.8	FN-08: PATROL LOST screen + R/Space redeploy
+P1-01	SNAKE-egj.1	P1-01: Wire grayscale night-recon palette + Phase 1 visuals
+P1-02	SNAKE-egj.2	P1-02: Wall and self-collision loss
+P1-03	SNAKE-egj.3	P1-03: Intra-phase speed ramp (6 → 8 cells/sec by score 50)
+P1-04	SNAKE-egj.4	P1-04: Phase 1→2 gate detection + banner
+P1-05	SNAKE-egj.5	P1-05: Verify §5.5 Acceptance Criteria
+P2-01	SNAKE-8ik.1	P2-01: Phase 2 camo palette swap on gate (blocky-camo segments, crate-styled supply cache)
+P2-02	SNAKE-8ik.2	P2-02: Field rations (cadence, lifetime, score, despawn)
+P2-03	SNAKE-8ik.3	P2-03: Scavenger Training upgrade (1.5-cell radius pull on supplies)
+P2-04	SNAKE-8ik.4	P2-04: Score multiplier bonus (2× for 10 s, cadence 60–90 s)
+P2-05	SNAKE-8ik.5	P2-05: Phase 2→3 gate detection + banner
+P2-06	SNAKE-8ik.6	P2-06: Verify §6.6 Acceptance Criteria
+P3-01	SNAKE-pi2.1	P3-01: Ambush data model + spawn cadence (12–20 s)
+P3-02	SNAKE-pi2.2	P3-02: Ambush telegraph render (1.5 s translucent gunmetal sight line)
+P3-03	SNAKE-pi2.3	P3-03: Ambush sweep animation (0.4 s edge-to-edge)
+P3-04	SNAKE-pi2.4	P3-04: Cut-at-strike-point math (head-side survives, casualties drop)
+P3-05	SNAKE-pi2.5	P3-05: Cover bonus (held, HUD icon, absorb on collision)
+P3-06	SNAKE-pi2.6	P3-06: Ambush ↔ Cover interaction (absorb hit, no cut)
+P3-07	SNAKE-pi2.7	P3-07: Phase 3→4 gate detection + banner
+P3-08	SNAKE-pi2.8	P3-08: Verify §7.6 Acceptance Criteria
+P4-01	SNAKE-juy.1	P4-01: Bunker data model + render (sandbag-gray rounded squares)
+P4-02	SNAKE-juy.2	P4-02: Bunker placement (6% density, rejection sampling)
+P4-03	SNAKE-juy.3	P4-03: Flood-fill connectivity validation (≥ 90%)
+P4-04	SNAKE-juy.4	P4-04: Bunker ↔ patrol collision (bunker loses patrol, Cover absorbs)
+P4-05	SNAKE-juy.5	P4-05: Supply / bonus spawn rejection against bunkers
+P4-06	SNAKE-juy.6	P4-06: Sprint boost bonus (held, Shift to activate, 3 s charge)
+P4-07	SNAKE-juy.7	P4-07: Phase 4→5 gate detection + banner
+P4-08	SNAKE-juy.8	P4-08: Verify §8.7 Acceptance Criteria
+P5-01	SNAKE-401.1	P5-01: Phase 5 sector model (S1, S2, …)
+P5-02	SNAKE-401.2	P5-02: Bunker density formula per sector + cap
+P5-03	SNAKE-401.3	P5-03: Tempo-multiplier formula per sector + cap
+P5-04	SNAKE-401.4	P5-04: Wormhole data model + render (implementer chooses readable transition marker)
+P5-05	SNAKE-401.5	P5-05: 30 s wormhole countdown + 'Next wormhole: NN s' HUD display
+P5-06	SNAKE-401.6	P5-06: Wormhole placement (empty cells ≥ 8 apart, retry on failure)
+P5-07	SNAKE-401.7	P5-07: Wormhole entry → sector transfer (persist score/length/upgrade/held bonuses)
+P5-08	SNAKE-401.8	P5-08: Phase 5 patrol-loss respawn (current sector, lose held bonuses, keep Scavenger Training)
+P5-09	SNAKE-401.9	P5-09: S10 soft cap visual handling
+P5-10	SNAKE-401.10	P5-10: 'SECTOR CLEARED' win condition (patrol covers all reachable cells)
+P5-11	SNAKE-401.11	P5-11: Verify §9.9 Acceptance Criteria
+FIN-01	SNAKE-auz.1	FIN-01: Phase-transition banner (2 s fade-in/out)
+FIN-02	SNAKE-auz.2	FIN-02: Reinforcement pickup (cadence 90–150 s, 5-cap, squad-marker HUD row)
+FIN-03	SNAKE-auz.3	FIN-03: Reinforcement consumed on patrol loss (respawn flow)
+FIN-04	SNAKE-auz.4	FIN-04: Wire pause to freeze Ambush timers, wormhole countdown, bonus expirations
+FIN-05	SNAKE-auz.5	FIN-05: File name (snake_[model].html, sonnet fallback) + no-external-deps audit
+FIN-06	SNAKE-auz.6	FIN-06: §13 whole-game Acceptance Criteria
