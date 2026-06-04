@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "command": "bash $CLAUDE_PROJECT_DIR/.claude/statusline.sh",
+    "padding": 0,
+    "type": "command"
+  }
+}
