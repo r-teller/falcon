@@ -381,7 +381,7 @@ This is an opinionated personal tool, but PRs are welcome for bug fixes, documen
 
 ## Backlog
 
-- **File monitoring during bootstrap:** watch the PRD and `.claude/*.md` context files during the 6-step init walkthrough so edits to source material trigger incremental re-hydration instead of a full restart of the bootstrap prompt.
+- **File monitoring as a cron alternative for autopilot:** watch dispatch files and sidecar state via filesystem events (inotify / fsevents) instead of polling on a `--watch` / `--auto-ack` / `--auto-amend` / worker-self-poll cadence. Autopilot reacts to state changes (intent emission, completion-hash write, `amendments_pending` flip) instantly rather than on the next bucket-driven interval, and silent-fire overhead drops to zero.
 - **Per-worker model selection at dispatch:** `--model=<name>` flag on `/falcon work beads` to route individual dispatches to specific Claude models (e.g., Haiku for mechanical chores, Opus for cross-cutting features) instead of inheriting the steering session's default model. Composes with `--sequential` so a single sequential dispatch can pin a model per bead.
 
 ## License
