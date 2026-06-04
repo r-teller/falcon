@@ -51,4 +51,45 @@ template_entry:
 #     - "1 falcon dispatch stashed at .claude/tmp/falcon-reports-feature-work-20260525-power-up-shop-rotation.yaml"
 # <!-- /theme example -->
 
-entries: []  # /wrapup prepends new session entries here
+entries:
+  - date: "2026-06-04 03:30 UTC"
+    branch: "feature/work-20260603-2200-local-changes"
+    focus: [feature, infrastructure, documentation]
+    completed:
+      - "SNAKE-i0w.1 (FN-01): HTML scaffold + canvas + HUD shell — examples/snake_opus.html"
+      - "SNAKE-i0w.2 (FN-02): rAF loop with fixed-tick accumulator, dt cap, paused flag"
+      - "SNAKE-i0w.3 (FN-03): Arrows + WASD input handler with direct-opposite rejection"
+      - "SNAKE-i0w.4 (FN-04): Patrol model — head-first segments, growth, reset"
+      - "SNAKE-i0w.5 (FN-05): Supply cache spawn with rejection sampling, +1 score / +1 grow on pickup"
+      - "SNAKE-i0w.6 (FN-06): DOM-overlay HUD — score / phase / reinforcements / bonus slot"
+      - "SNAKE-i0w.7 (FN-07): P/Esc HOLD POSITION pause overlay"
+      - "SNAKE-i0w.8 (FN-08): PATROL LOST screen with canonical copy + R/Space redeploy"
+      - "SNAKE-egj.1 (P1-01): Grayscale night-recon palette + phase-branched palette() helper"
+      - "SNAKE-egj.2 (P1-02): Wall + self collision → losePatrol"
+      - "SNAKE-egj.3 (P1-03): Intra-phase speed ramp 6→8 cells/sec across score 0..50"
+      - "SNAKE-egj.4 (P1-04): Phase 1→2 gate detection + 2s fade banner via transitionToPhase()"
+      - "Set up SNAKE-prefix beads workspace; created 7 epics + 52 child beads per PRD §16"
+      - "Refined 19 beads to triage:ready: FN-01..FN-08, P1-01..P1-05, P2-01..P2-06 (full work-item-templates.md sections + size:small + layer:frontend + persona:* + cynefin:*)"
+      - "Wrote .claude/rules/falcon-autopilot.md (412 lines, aggressive profile)"
+    discovered:
+      - "SNAKE-zvx: Add Success Criteria section to all 7 Snake epics (EP-01..EP-07) — bd lint warning gap"
+    in_progress:
+      - "SNAKE-egj.5 (P1-05): §5.5 AC verification — left open pending live browser playthrough (this environment has no browser surface); static / structural checks already passed"
+    blockers: []
+    next_steps:
+      - "Open examples/snake_opus.html in a browser, walk PRD §5.5 checklist, close SNAKE-egj.5 OR file follow-up bugs via `bd create ... --deps discovered-from:SNAKE-egj.5`"
+      - "Claim P2-* beads (all triage:ready). Order: P2-01 (palette) + P2-02 (rations) + P2-04 (multiplier) + P2-05 (gate) ready immediately; P2-03 (Scavenger) unblocks after P2-02; P2-06 (verify) last"
+      - "Refine Phase 3 (EP-04, 8 P3-* beads) — first cynefin:complicated phase; P3-01 ↔ P3-02 are pair:ambush-spawn (claim + close together)"
+      - "SNAKE-zvx: write Success Criteria for the 7 epics so bd lint goes clean"
+    epic_progress:
+      - "SNAKE-i0w (EP-01 Foundation) 0% → 100% (8/8 closed)"
+      - "SNAKE-egj (EP-02 Phase 1) 0% → 80% (4/5 closed; P1-05 verify in_progress)"
+      - "SNAKE-8ik (EP-03 Phase 2) 0% → 0% (0/6 closed; all 6 triage:ready)"
+    commits: ["02f7cf4", "328d642", "7c6415a"]
+    notes:
+      - "Session constraint: all commits local-only — NO push, NO PR, NO upstream operations of any kind. Honor across future sessions until explicitly lifted."
+      - "Branch is feature/work-20260603-2200-local-changes — local-only, never pushed."
+      - "9 helper scripts at .beads/_*.sh stay UNTRACKED on purpose. Reproducibility of the bead-structure setup is captured in PRD §16 + .beads/bodies/*.md + .beads/id_map.txt; scripts were single-use plumbing."
+      - "bd dep direction gotcha: --deps 'blocks:X' on bd create stores the relationship inverted (new bead becomes the blocker, listed id becomes the dependent). Workaround used here: created beads with --deps then ran a fix-up script (_fix_deps.sh) using bd dep remove + bd dep add to flip every edge. See .claude/enhancements.md for the doc-gap entry."
+      - "Direct-work mode this session — no /falcon dispatches stashed (no .claude/tmp/falcon-reports-*.yaml)."
+      - "Falcon autopilot consumer flags themselves are ⊘ proposed in v7.2.0; .claude/rules/falcon-autopilot.md is a forward-looking spec ready for when the runtime lands."

@@ -62,4 +62,24 @@ template_entry:
 #   commits: ["3f8a1c2", "9e02bb4", "11d4470"]
 # <!-- /theme example -->
 
-entries: []  # /wrapup prepends new session entries here
+entries:
+  - version: "0.1.0"
+    date: "2026-06-04"
+    branch: "feature/work-20260603-2200-local-changes"
+    focus: [feature, infrastructure, documentation]
+    summary: "Build Snake five-phase PRD bead structure (7 epics, 52 children); refine Foundation + Phase 1 + Phase 2 beads to triage:ready; ship Phase 1 single-file HTML implementation; activate falcon autopilot rules at aggressive profile"
+    beads: [SNAKE-i0w.1, SNAKE-i0w.2, SNAKE-i0w.3, SNAKE-i0w.4, SNAKE-i0w.5, SNAKE-i0w.6, SNAKE-i0w.7, SNAKE-i0w.8, SNAKE-egj.1, SNAKE-egj.2, SNAKE-egj.3, SNAKE-egj.4, SNAKE-zvx]
+    epic_progress: "SNAKE-i0w (EP-01 Foundation) 0% → 100%; SNAKE-egj (EP-02 Phase 1) 0% → 80% (P1-05 verify still in_progress)"
+    frontend:
+      - "added: examples/snake_opus.html — 513-line single-file HTML5-canvas game implementing Foundation (FN-01..FN-08) + Phase 1 Night Recon (P1-01..P1-04). 640×480 canvas, fixed-tick rAF loop, patrol model with directional notch, rejection-sampled supply cache spawn, wall + self collision → canonical PATROL LOST screen, P/Esc hold-position overlay, R/Space redeploy, phase-branched palette()/recomputeTickRate()/transitionToPhase() helpers ready for Phase 2+ extension, score-driven 6→8 cells/sec ramp, Phase 1→2 gate at score 50 with 2s fade banner. No external deps."
+    infra:
+      - "added: .beads/ — initialized SNAKE-prefix bd workspace via bd init --non-interactive; auto-installed Claude Code hooks"
+      - "added: 7 epics + 52 child beads created per PRD §16 with parent links and per-PRD dependency edges (dep direction corrected mid-flight after discovering --deps 'blocks:X' inverts the relationship)"
+      - "added: cynefin:clear / cynefin:complicated labels per §16 tables; pair:* labels on the 3 PRD §16.10 paired groups"
+    docs:
+      - "added: .claude/rules/falcon-autopilot.md (412 lines) — aggressive profile activated. Active gates: universal-only §1 intent; 3 PROJECT §2 whitelist items (missing_wave_pack_version_pin_bump, missing_bd_export_after_batch, missing_closes_footer); ALL 5 §3 denylist items; 2 §4 cognitive hints (migration_or_rename_bead, schema_bearing_bead); §5 quartermaster advisor; §6 aggressive budgets (chore:3, feature_large:8, decision/spike/epic:0)"
+      - "added: .beads/bodies/{FN-01..FN-08,P1-01..P1-05,P2-01..P2-06}.md — 19 full-template body files (Summary, Persona, Changes Needed, AC, Patterns to Reuse, Testing Strategy, Effort Forecast). All 19 beads carry size:small + layer:frontend + persona:* + triage:ready"
+      - "added: .beads/id_map.txt — logical-id (FN-01, P1-04, EP-03) → bd-id (SNAKE-i0w.1, SNAKE-egj.4, SNAKE-8ik) mapping for future-session lookups"
+      - "added: .claude/enhancements.md — 5 documented gaps surfaced this session (bd deps direction, bd label add multi-label, Epic Success Criteria, falcon bypassPermissions check, bd close ordering)"
+      - "added: discovered bead SNAKE-zvx (chore, P3, triage:ready) — Add Success Criteria sections to all 7 epics per Epic template"
+    commits: ["02f7cf4", "328d642", "7c6415a"]

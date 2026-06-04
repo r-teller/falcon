@@ -57,3 +57,4 @@ FIN-03	SNAKE-auz.3	FIN-03: Reinforcement consumed on patrol loss (respawn flow)
 FIN-04	SNAKE-auz.4	FIN-04: Wire pause to freeze Ambush timers, wormhole countdown, bonus expirations
 FIN-05	SNAKE-auz.5	FIN-05: File name (snake_[model].html, sonnet fallback) + no-external-deps audit
 FIN-06	SNAKE-auz.6	FIN-06: §13 whole-game Acceptance Criteria
+EX-01	SNAKE-zvx	Add Success Criteria section to all 7 Snake epics
