@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "SNAKE",
+  "project_id": "87e72fee-09b0-42ca-a49f-764ab6efff5a"
+}
