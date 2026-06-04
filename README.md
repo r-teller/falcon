@@ -379,6 +379,11 @@ Independent of falcon. See "Optional: Advisor cluster" above for purpose and ins
 
 This is an opinionated personal tool, but PRs are welcome for bug fixes, documentation clarifications, and obvious gaps. For larger design changes, open an issue first to discuss whether it fits the skill's scope.
 
+## Backlog
+
+- **File monitoring during bootstrap:** watch the PRD and `.claude/*.md` context files during the 6-step init walkthrough so edits to source material trigger incremental re-hydration instead of a full restart of the bootstrap prompt.
+- **Per-worker model selection at dispatch:** `--model=<name>` flag on `/falcon work beads` to route individual dispatches to specific Claude models (e.g., Haiku for mechanical chores, Opus for cross-cutting features) instead of inheriting the steering session's default model. Composes with `--sequential` so a single sequential dispatch can pin a model per bead.
+
 ## License
 
 [MIT](LICENSE) — see the LICENSE file. Copyright (c) 2026 Robert Teller.
