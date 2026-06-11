@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falcon/schemas/handoff.schema.json",
+  "title": "Falcon Handoff Log",
+  "description": "Session-state log: .claude/handoff.yaml. Each entry covers one session/branch and captures completed/discovered/in-progress/blockers/next_steps. Companion doc: .claude/docs/handoff-schema.md.",
+  "type": "object",
+  "required": ["entries"],
+  "properties": {
+    "template_entry": {
+      "description": "Optional documentation entry that travels with the schema. Recommended.",
+      "$ref": "#/$defs/entry"
+    },
+    "entries": {
+      "description": "Newest-first list of session handoff entries.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["date", "branch", "focus"],
+      "properties": {
+        "date": {
+          "description": "Wall-clock session-end time, UTC, to the minute. Format: 'YYYY-MM-DD HH:MM UTC' OR 'YYYY-MM-DDTHH:MM:SSZ'.",
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?( UTC|Z|[+-][0-9]{2}:[0-9]{2})?$"
+        },
+        "branch": {
+          "description": "Feature branch the session worked on.",
+          "type": "string"
+        },
+        "focus": {
+          "description": "Category tags for the session's work.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["feature", "bugfix", "refactor", "infrastructure", "documentation", "stabilization"]
+          },
+          "minItems": 1
+        },
+        "completed": {
+          "description": "Beads closed this session. Each entry: '<bead-id>: <outcome>'.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "discovered": {
+          "description": "Beads filed mid-session.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "in_progress": {
+          "description": "Beads claimed but not closed; partial-work state.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "blockers": {
+          "description": "Beads stuck on external dependencies, decisions, or merges.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "next_steps": {
+          "description": "Priority-ordered prose action list.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "epic_progress": {
+          "description": "One-line delta per active epic, e.g., 'asteroid-001 35% → 48%'.",
+          "type": "string"
+        },
+        "commits": {
+          "description": "7-char commit hashes from the session, in order. Always quoted in YAML to prevent number-parsing.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{7,40}$"
+          }
+        },
+        "notes": {
+          "description": "Optional free-form addenda for context that doesn't fit structured fields.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

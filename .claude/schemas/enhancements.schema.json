@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falcon/schemas/enhancements.schema.json",
+  "title": "Falcon Enhancements Log",
+  "description": "Typed log of mid-session enhancement ideas, retros, and standards candidates: .claude/enhancements.yaml. Replaces legacy free-form enhancements.md (per DAR 4). Companion doc: .claude/docs/enhancements-schema.md.",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": {
+      "description": "Schema version for forward compatibility.",
+      "type": "integer",
+      "const": 1
+    },
+    "thresholds": {
+      "description": "Per-kind alert thresholds. /leroy emits §9 Enhancements Alert when an open-kind count exceeds. Tunable per project.",
+      "type": "object",
+      "properties": {
+        "open_doc_gap_alert": { "type": "integer", "minimum": 0, "default": 10 },
+        "open_candidate_alert": { "type": "integer", "minimum": 0, "default": 20 },
+        "open_retro_alert": { "type": "integer", "minimum": 0, "default": 60 },
+        "workflow_friction_alert": { "type": "integer", "minimum": 0, "default": 15 },
+        "tooling_pain_alert": { "type": "integer", "minimum": 0, "default": 15 },
+        "other_alert": { "type": "integer", "minimum": 0, "default": 30 },
+        "retro_archive_age_days": { "type": "integer", "minimum": 1, "default": 90 },
+        "candidate_retire_age_days": { "type": "integer", "minimum": 1, "default": 180 },
+        "doc_gap_retire_age_days": { "type": "integer", "minimum": 1, "default": 60 }
+      },
+      "additionalProperties": false
+    },
+    "template_entry": {
+      "description": "Optional documentation entry that travels with the schema.",
+      "$ref": "#/$defs/entry"
+    },
+    "entries": {
+      "description": "Newest-first list of typed entries.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["id", "date", "kind", "status", "summary", "source", "body"],
+      "properties": {
+        "id": {
+          "description": "Stable identifier: YYYYMMDD-N where N is sequential within the date.",
+          "type": "string",
+          "pattern": "^[0-9]{8}-[0-9]+$"
+        },
+        "date": {
+          "description": "Date the entry was created.",
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "kind": {
+          "description": "Entry type. Each kind has its own state machine (see metadata: enhancements-schema.md).",
+          "type": "string",
+          "enum": ["doc_gap", "retro", "standards_candidate", "workflow_friction", "tooling_pain", "other"]
+        },
+        "status": {
+          "description": "Lifecycle state. doc_gap: open→resolved. standards_candidate: open→promoted/retired. retro: typically stays open until archived. workflow_friction/tooling_pain: open→resolved. other: ages out at 90d.",
+          "type": "string",
+          "enum": ["open", "resolved", "promoted", "deferred", "retired"]
+        },
+        "summary": {
+          "description": "One-line summary used in startup counts + grep.",
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "description": "Where the entry came from: bead ID, 'direct' (session-side capture), or 'falcon-dispatch-<id>'.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Target doc to update when applying a fix. Null when not applicable (kinds without a target doc).",
+          "type": ["string", "null"]
+        },
+        "firings": {
+          "description": "Standards-candidate firing count. Auto-promotes at firings >= 3.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "body": {
+          "description": "Multi-line free-form description. Block scalars accept paragraph prose.",
+          "type": "string"
+        },
+        "resolution_note": {
+          "description": "Populated when status transitions away from open.",
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "standards_candidate" } } },
+          "then": { "required": ["firings"] }
+        }
+      ]
+    }
+  }
+}

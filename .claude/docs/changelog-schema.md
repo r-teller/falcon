@@ -4,6 +4,8 @@ Schema reference for `.claude/changelog.yaml` — the structured release log. Ea
 
 **Companion:** [`handoff-schema.md`](./handoff-schema.md) — the session-state log that lives alongside this file.
 
+**Machine validation:** [`../schemas/changelog.schema.json`](../schemas/changelog.schema.json). The YAML file carries a `# yaml-language-server: $schema=...` header for editor live-validation.
+
 ## Reader / writer roles
 
 | Role | Operation |

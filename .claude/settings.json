@@ -1,7 +1,19 @@
 {
   "statusLine": {
-    "command": "bash $CLAUDE_PROJECT_DIR/.claude/statusline.sh",
+    "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/statusline.sh",
     "padding": 0,
     "type": "command"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
   }
 }

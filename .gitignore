@@ -1,3 +1,11 @@
 .claude/settings.local.json
 .claude/tmp/
 .tmp/
+
+# Token tracking state (per-project ephemeral; lives under .claude/tmp/.token_tracking/
+# which is already covered by .claude/tmp/ above, listed here for visibility)
+.claude/tmp/.token_tracking/
+
+# Metrics log — DECISION: committed by default so calibration data is team-shared.
+# Uncomment the next line if you'd rather keep metrics.jsonl per-developer-private.
+# .claude/metrics.jsonl

@@ -340,6 +340,31 @@ Secondary: System (background job uses item_count for digest emails)
 | `backend/api/categories/routes.py` | Edit | COUNT query + model_copy(update={}) in get_category |
 ```
 
+### Required Context
+> **Purpose:** Name the `.claude/*.md` files whose contracts or invariants the agent must understand before editing the source files in Changes Needed. Replaces navigator-recon's keyword heuristic — the bead author knows what context the work needs; navigator/falcon should not guess.<br>
+> **Required for `cynefin:complicated` and `cynefin:complex`** — must list 1-3 entries OR explicitly state `(none — execution context inline in Changes Needed)` with a reason.<br>
+> **Optional for `cynefin:clear`** — absence is the correct signal that the bead is atomic and needs no preemptive context loading.<br>
+> **Not sufficient:** Listing every `.claude/*.md` file "just in case" (context bloat); listing files that aren't actually read during execution.<br>
+
+Each entry should name the file AND the specific section/concern, so the reader knows where to focus:
+
+**Example (cynefin:complicated):**
+```
+- `.claude/security.md` § "OWASP credential handling" — defines the auth contract this bead must preserve when reshaping the login route
+- `.claude/data-model.md` § "User model" — the FK relationship we're touching
+- `.claude/architecture.md` § "Environment Health Checks" — confirm the new /health/auth endpoint gets added to the table for /leroy
+```
+
+**Example (cynefin:clear, optional but explicit):**
+```
+(none — Changes Needed names exact lines + values; execution is mechanical)
+```
+
+**Consumed by:**
+- `navigator-recon` Step 5 — emits the union as §6 Load Into Main Context.
+- `falcon` dispatch — copied verbatim into the dispatch yaml's `required_context[]` field; worker reads the named files before intent-confirm.
+- `bd lint` — verifies the section exists for `cynefin:complicated` / `cynefin:complex` items.
+
 ### Acceptance Criteria
 > **Purpose:** Define "done" -- testable, checkable items grouped by persona.<br>
 > **Required:** Checklist format (`- [ ]`). Grouped under persona headings matching the Persona section. Each persona must have at least one item. Include regression check.<br>
@@ -357,18 +382,32 @@ Secondary: System (background job uses item_count for digest emails)
 ```
 
 ### Effort Forecast
-> **Purpose:** Enable planning and track estimation accuracy over time.<br>
-> **Required:** Per-phase breakdown (plan / implement / test, plus discover/fix when applicable), each with turns and output tokens and a one-line rationale; a Total line summing the phases; and a confidence level.<br>
-> **Not sufficient:** "Should be quick"; a single combined turn count with no phase breakdown; phases without rationale; total that doesn't match the sum of phases.<br>
-> **Why per-phase:** The token-tracking hook records per-phase actuals; comparing a single-number forecast against per-phase actuals (or vice versa) produces misleading 3-25× false-overrun signals. Per-phase forecasts that sum to a total give clean apples-to-apples comparison.<br>
+> **Purpose:** Enable planning and track estimation accuracy over time. Pair with `.claude/scripts/token-tracking.py` which records per-phase actuals.<br>
+> **Required:** Full 5-phase breakdown — **plan / discover / implement / test / fix** — each with turns and output tokens and a one-line rationale. Phases that don't apply to a bead's work shape (e.g., a `cynefin:clear` chore with no discovery, a feature with no fix iteration expected) must be written explicitly as `N/A` or `0 turns / 0 tokens` with a rationale; do NOT silently omit. Plus a Total line summing applicable phases; plus a Confidence level.<br>
+> **Not sufficient:** "Should be quick"; a single combined turn count with no phase breakdown; phases without rationale; missing phase labels; total that doesn't match the sum of phases.<br>
+> **Why 5-phase:** The kit's `token-tracking.py` records per-phase actuals using the same 5 phase names. Comparing a 3-phase forecast against 5-phase actuals (or vice versa) produces misleading 3-25× false-overrun signals when `discover`/`fix` actuals exist but no forecast does. Authors who declare `N/A` for phases that don't apply keep the join clean — the comparison just skips those phases.<br>
+> **Validated by:** `.claude/scripts/check-bead-contract.py` — the `effort_forecast_not_per_phase` rule requires all 5 phase names + Total + Confidence keywords to appear in the section body. Schema version 1.2.<br>
 
-**Example:**
+**Example (full-shape bead, all 5 phases applicable):**
 ```
 - Plan: ~3 turns, ~1500 tokens (read 2 files for context)
+- Discover: ~5 turns, ~2000 tokens (investigate which middleware injection point exists)
 - Implement: ~8 turns, ~3500 tokens (similar to proj-x08.3 — schema fix, 2 files)
 - Test: ~2 turns, ~600 tokens (pytest only, low iteration risk)
-- Total: ~13 turns, ~5600 tokens
+- Fix: ~3 turns, ~1000 tokens (expected one test-iteration round for edge cases)
+- Total: ~21 turns, ~8600 tokens
 - Confidence: medium (comparable prior items exist; impl phase historical avg was 7.5t / 4573 tok)
+```
+
+**Example (cynefin:clear chore with no discover/fix expected):**
+```
+- Plan: ~2 turns, ~800 tokens (read CONTRIBUTING.md target section)
+- Discover: N/A (mechanical edit; no investigation needed)
+- Implement: ~3 turns, ~1200 tokens (single-file find/replace)
+- Test: ~1 turn, ~400 tokens (markdown lint + spell check)
+- Fix: 0 turns, 0 tokens (no iteration expected; lint either passes or doesn't)
+- Total: ~6 turns, ~2400 tokens
+- Confidence: high (well-scoped chore; pattern recurs)
 ```
 
 ---
@@ -1044,6 +1083,7 @@ Before a work item can be set to `triage:ready`, verify:
 - [ ] **Effort forecast:** Per-phase breakdown (plan/implement/test minimum + Total + Confidence) with rationale per phase. Comparable prior item referenced where helpful. Single-number forecasts (no phase breakdown) are not sufficient — see the Effort Forecast template contract above.
 - [ ] **Dependencies formalized:** Every "blocks on", "depends on", or "requires" claim in the description has a corresponding formal dependency entry. Use `bd dep add <id> <upstream-id> -t blocks` (bd 1.0.3+ syntax) and verify with `bd dep tree <id>` — the visual tree must match the prose. Prose dependencies that aren't formalized are a defect — `bd ready` will surface the item while its prerequisites are still open, and any coordinator picking it up will hit the missing upstream mid-implementation. Run a quick audit: scan the description for the words "blocks", "depends", "requires", "after", "prerequisite" — every match should resolve to a formal dependency entry OR be reworded as informational ("works best alongside X" instead of "depends on X").
 - [ ] **Upstream dependencies resolved:** If the item references findings from an open spike, decision, or research item, those findings must be captured in this item's description or explicitly stubbed with bounded assumptions — not just referenced. A spec built on unresolved upstream assumptions is not ready.
+- [ ] **Required Context declared (`cynefin:complicated` / `cynefin:complex` only):** A `## Required Context` section names the `.claude/*.md` files whose contracts/invariants the agent must understand before editing the source files listed in Changes Needed. **HARD BIND:** `cynefin:complicated` and `cynefin:complex` items CANNOT reach `triage:ready` without this section. `cynefin:clear` items MAY include it but it is optional — clear items are atomic; absence is the correct signal for "no preemptive context required, execute from Changes Needed alone." See the **Required Context section contract** below. Enforced by `bd lint` per the kit's contract; if your project hasn't wired the lint rule yet, the readiness gate is enforced by reviewer convention until then.
 - [ ] **Lint passes:** `bd lint` returns no warnings.
 - [ ] **Priority set:** Confirmed (not default without consideration)
 - [ ] **Epic assigned:** Parent epic linked or justified standalone

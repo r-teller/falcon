@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=./schemas/enhancements.schema.json
+# Enhancements — typed log of mid-session enhancement ideas, retros, and standards candidates.
+# Replaces legacy free-form enhancements.md.
+# /wrapup writes; navigator-recon reads via yq queries on open-status entries.
+# Full schema reference: .claude/docs/enhancements-schema.md
+#
+# Reader pattern: yq '[.entries[] | select(.status == "open")] | group_by(.kind) | map({(.[0].kind): length}) | add' .claude/enhancements.yaml
+# Writer pattern: yq -i ".entries = [{new}] + .entries" .claude/enhancements.yaml  (newest-first)
+
+schema_version: 1
+
+# Per-kind alert thresholds. /leroy emits §9 Enhancements Alert when an open-kind count exceeds.
+# Tune per project — these defaults target ~33 wrapups/month cadence.
+thresholds:
+  open_doc_gap_alert: 10
+  open_candidate_alert: 20
+  open_retro_alert: 60
+  workflow_friction_alert: 15
+  tooling_pain_alert: 15
+  other_alert: 30
+  retro_archive_age_days: 90
+  candidate_retire_age_days: 180
+  doc_gap_retire_age_days: 60
+
+template_entry:
+  id: "YYYYMMDD-N"
+  date: "YYYY-MM-DD"
+  kind: "doc_gap | retro | standards_candidate | workflow_friction | tooling_pain | other"
+  status: "open"
+  summary: "one-line — used in startup count + grep"
+  source: "bead-id | direct | falcon-dispatch-id"
+  target: ".claude/backend.md"
+  firings: 1                      # only meaningful for kind: standards_candidate
+  body: |
+    Multi-line free-form description. Block scalars accept full-paragraph
+    prose — use the room. Retro narratives belong here at full fidelity.
+  resolution_note: null           # populated when status transitions away from open
+
+entries: []

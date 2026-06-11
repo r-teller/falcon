@@ -12,6 +12,7 @@ Falcon is a [Claude Code](https://claude.com/claude-code) skill that ships a sel
 - **Amendments:** post-completion follow-up instructions from steering land in the dispatch file's `amendments[]` array; the worker re-reads, executes, writes back. No re-dispatch overhead for gap-closing.
 - **Autopilot (v6.8.0+):** five-phase cron-driven automation rollout — `--watch` (observation), `--auto-ack` (intent gate eval), `--auto-amend` (whitelist-driven amendment issuance with budget HALT), `--worker-cron` (worker-side amendment pickup), `--release-on-merge` (lock held until PR merge), `--advisor=<agent>` (fork ambiguous decisions to a registered skill). The `--autopilot` macro bundles four of these for full bidirectional AFK operation.
 - **Return-to-AFK utility:** `/falcon list-pending` surfaces every pending-human item across all active dispatches in one read-only command; the `--watch` cron prepends `⚠️ HIGH-STAKES DAR PENDING` headlines so DARs can't get lost in routine status emissions.
+- **Forecast vs Actual calibration loop:** bead authors forecast effort per phase at `triage:ready` time (5 phases: plan / discover / implement / test / fix); `.claude/scripts/token-tracking.sh` captures actuals per phase per session; `/wrapup` Task 3c flushes to `.claude/metrics.jsonl`. `velocity-report.py` produces a self-contained HTML dashboard. Per-bead, per-cynefin, per-size variance is queryable via `jq` against the JSONL (recipes in [`metrics-schema.md`](.claude/docs/metrics-schema.md)). Closes the loop: forecast → claim → track → close → metric → calibrate → refine forecasts.
 
 ## When to use
 
@@ -24,6 +25,32 @@ Falcon is a [Claude Code](https://claude.com/claude-code) skill that ships a sel
 - **Architectural decisions that need active steering** — keep those in the steering session, don't dispatch.
 - **Beads that aren't `triage:ready`** — refine first, then dispatch.
 - **Single-shot exploratory work** — overhead isn't worth it for one-off questions.
+
+## What's NOT for you
+
+The kit is heavyweight. Some project shapes won't see ROI on the overhead:
+
+- **Single-developer projects with <5 beads/sprint.** The contract enforcement, structured handoff/changelog, falcon dispatch, and `/wrapup` ceremony all overhead-tax small projects. If you'd never spin up another worker session, you're paying for machinery you won't use.
+- **Quick-prototype work.** The hydrated-bead contract (Required Context, per-phase Effort Forecast, cynefin classification) is overkill for "let me try this and see if it works."
+- **Projects already on a different work-tracking system.** Falcon assumes bd; adapting workers to Jira / Linear / GitHub Issues is possible but requires rewriting the worker lifecycle (`bd show`, `bd update`, `bd close` → equivalents in your tracker).
+- **Conversational / exploratory sessions.** No code changes to wrap up. `/wrapup` doesn't add value when nothing landed; skip it.
+- **You don't want opinionated structure.** The kit imposes file conventions (typed YAML for handoff/changelog/enhancements/standards-history), task ordering, and a promotion lifecycle. If you prefer free-form workflow tracking, this isn't the kit.
+
+If most of those apply, falcon's dispatch primitive alone (Option 2 in Installation) without the `/leroy` + `/wrapup` cluster may still fit. Otherwise consider lighter-weight alternatives.
+
+## What this costs
+
+Falcon's full kit (`/leroy` + `/wrapup` + falcon dispatch) is heavyweight by design. Typical token spend at Opus pricing (~$15/M effective tokens, where eff-tokens = `input + 1.25·cache_create + 0.1·cache_read + 5·output`):
+
+| Operation | Median eff-tokens | Median turn-time | Cost (approx) |
+|---|---|---|---|
+| `/leroy` startup orientation (full) | ~9M | ~7.5 min | ~$0.14 |
+| `/leroy --minimal` (continuation; handoff + corpus + label filter) | ~4-5M | ~3 min | ~$0.07 |
+| `/wrapup` (full ritual) | ~7.5M | ~7 min | ~$0.11 |
+| `/wrapup --minimal` (typo fix, checkpoint) | ~2M | ~2.5 min | ~$0.03 |
+| One falcon dispatch (steering + worker, ex-work) | ~30–100M | varies | ~$0.50–1.50 |
+
+A typical full session (`/leroy` → work → `/wrapup`) at the kit-level cost (excluding the actual work) is ~$0.30 per session. At ~30 sessions/month with ~5 falcon dispatches, the kit overhead is ~$10–15/month; the work itself adds variable cost depending on project size.
 
 ## Installation
 
@@ -38,11 +65,17 @@ Beyond the falcon skill itself, this repo ships a coordinated set of pieces that
 
 - **`.claude/skills/falcon/`** (5 files) — falcon itself
 - **`.claude/skills/{quartermaster,herald,scribe}/`** + **`.claude/agents/{quartermaster,herald,scribe,navigator}/`** — vendored advisor cluster (3 dispatcher skills + 13 specialist agents) + navigator subagent
-- **`.claude/commands/{leroy,wrapup}.md`** — session-startup + session-end slash commands
-- **`.claude/docs/`** — schema references (handoff, changelog, work-item-templates)
+- **`.claude/commands/{leroy,wrapup}.md`** — session-startup + session-end slash commands (current: leroy v2.9.0, wrapup v2.13.2)
+- **`.claude/docs/`** — schema references (handoff, changelog, work-item-templates, **enhancements**, **standards-history**, **lint-integration**)
 - **`.claude/rules/`** — workflow modules + `development-standards.md` template stub
+- **`.claude/hooks/`** — Claude Code auto-invoked scripts: `session-start.sh` (injects session_id + transcript_path into context), `statusline.sh` (status-line refresh)
+- **`.claude/scripts/`** — workflow/user/CI utility scripts: `check-bead-contract.py` (bead tier-contract enforcement — see [`lint-integration.md`](.claude/docs/lint-integration.md)), `token-tracking.sh` (5-phase forecast-vs-actual capture), `velocity-report.py` (HTML velocity report from metrics.jsonl)
+- **`.claude/schemas/`** — JSON Schema validators for the 5 typed YAML/JSONL artifacts (handoff, changelog, enhancements, standards-history, metrics) — each YAML file carries a `# yaml-language-server: $schema=...` header for editor live-validation
 - **`.claude/{architecture,backend,frontend,data-model,security,tests,claude}.md`** — context-file stubs (asteroid-themed; hydrate via the [Bootstrap section](#bootstrap-a-new-project-from-your-prd) below)
 - **`.claude/{handoff,changelog}.yaml`** — session-state file stubs with `template_entry:` + a commented-out worked example
+- **`.claude/{enhancements,standards-history}.yaml`** — typed audit logs: `enhancements.yaml` for doc gaps / retros / standards candidates; `standards-history.yaml` for rule firings / promoted rules with slug-keyed identity
+- **`.claude/metrics.jsonl`** — append-only forecast-vs-actual log (committed by default for team-shared calibration; can be gitignored — see `.gitignore`)
+- **`.claude/settings.json`** — kit-shipped settings: `statusLine` config + `SessionStart` hook registration. Users can override per-machine via `settings.local.json` (gitignored)
 
 ### Option 1 — Full distribution (recommended)
 
@@ -342,6 +375,25 @@ On return:
 
 See [`PROTOCOL.md`](.claude/skills/falcon/PROTOCOL.md#--autopilot-mode-full-afk-bundle-v6110) `### --autopilot mode` for the wiring.
 
+## Flags and tiers
+
+The kit's commands accept flags that gate behavior or pick a faster path:
+
+### `/leroy`
+
+- `--skip-health` — skip the architecture.md Environment Health Checks at startup. Use when env is known healthy or working offline. (leroy v2.5.0+)
+- `--minimal` — continuation mode. Assumes you're resuming existing work (not picking new). Skips env health checks, `git log -5`, navigator §3/6/7/8/9, and per-bead `bd show` calls for Effort Forecast. Navigator runs one `bd list --json --limit 0` corpus fetch + in-memory label filter for `triage:ready` picks. The "Ready to Start" picker still surfaces alternatives by label (Size + Cynefin columns), but the `~Turns` column shows `N/A` since `bd show` is skipped. Falls back to full /leroy automatically if `handoff.yaml entries[0]` is null/empty. ~50% savings (~$0.07 vs ~$0.14). (leroy v2.8.0+, paired with navigator-recon v1.5.0)
+
+### `/wrapup`
+
+- `--minimal` — run only Tasks 2 (verify) + 7 (commit) + 8 (handoff). Use for typo fixes, mid-feature checkpoints, tiny experiments. Auto-falls back to full ritual if synthesis-mode falcon stash detected. Task 8 emits a session-shape hint if substantive markers (≥1 bead closed, ≥3 commits, ≥5 files, etc.) suggest the session was bigger than `--minimal` warranted. (wrapup v2.10.0+)
+- `--feedback` — interactive 6-question retro mode (default is self-reflection mode that auto-captures findings without user interaction). Use when you want to provide your own observations. (wrapup v2.6.0+)
+- Flag composition: `/wrapup --minimal --feedback` runs minimal ritual; `--feedback` becomes no-op since Task 9 retro is skipped.
+
+### `/falcon work beads`
+
+See [`COMMANDS.md`](.claude/skills/falcon/COMMANDS.md) for the full flag surface (`--bg`, `--via-paste`, `--sequential`, `--autopilot`, `--advisor=<agent>`, `--skip-intent`, `--inline-beads`, etc.).
+
 ## Project assumptions
 
 Falcon makes a few assumptions about how the consuming project tracks work:
@@ -356,7 +408,7 @@ Falcon makes a few assumptions about how the consuming project tracks work:
 
 ## Architecture
 
-The repo has two layers — **falcon itself** (the skill) and an **optional advisor cluster** (vendored alongside).
+The repo has three layers — **falcon itself** (the skill), the **session / contract layer** (`/leroy`, `/wrapup`, scripts, typed-YAML artifacts), and an **optional advisor cluster** (vendored alongside).
 
 ### Falcon skill (~5 files, ~3,500 lines)
 
@@ -367,6 +419,17 @@ The repo has two layers — **falcon itself** (the skill) and an **optional advi
 - **`changelog.md`** — version history, most recent first
 
 Read `SKILL.md` first; it points to the other files.
+
+### Session / contract layer
+
+- **`.claude/commands/{leroy,wrapup}.md`** — session orchestration commands. Both carry versioned changelogs at the top of the file documenting flag additions and behavior changes.
+- **`.claude/agents/navigator/{navigator-recon,navigator-survey,navigator-maintenance}.md`** — orientation subagent (recon) + specialist routing (survey for complex, maintenance for simple). `/leroy` Step 3d cynefin-gates the routing dispatch.
+- **`.claude/docs/{enhancements,standards-history,handoff,changelog,work-item-templates,lint-integration}-schema.md`** — schema references for the typed artifacts the kit ships and the lint-integration recipes
+- **`.claude/scripts/check-bead-contract.py`** — bead tier-contract enforcement (backlog / triaged / ready label + section + rule requirements). Six mode flags (`--beads`, `--session`, `--since`, `--in-progress`, `--stale`, `--all`). Three output modes (human-readable text, `--json`, `--ids`). Severity-by-tier (HARD for ready / structural defects; SOFT for backlog/triaged refinement). ~1 sec for 160 beads via single bd_list corpus fetch. `CONTRACTS_VERSION` currently 1.2.
+- **`.claude/scripts/token-tracking.sh`** — phase-aware token tracking per bead. Five work phases (`plan / discover / implement / test / fix`) + coordinate phase for multi-bead planning. Bookmarks transcript line offsets at start/stop; computes deltas at stop. Per-project state at `.claude/tmp/.token_tracking/`. Cross-session resume + orphan detection. Started by `/leroy` Step 3e (per-bead) and Step 3d.2 (coordinate); flushed by `/wrapup` Task 3c. Closes the forecast → claim → track → close → metric → calibrate → refine loop.
+- **`.claude/scripts/velocity-report.py`** — generates a self-contained HTML velocity report from `metrics.jsonl` with embedded chart data. Open in any browser.
+- **`.claude/hooks/session-start.sh`** — fires on `SessionStart` event. Injects session_id + transcript_path into context so workflow knows where to capture metrics from.
+- **`.claude/{enhancements,standards-history,handoff,changelog}.yaml`** — typed audit and state artifacts. `enhancements.yaml` tracks doc gaps + retros + standards candidates with status state machine (DAR 4 / wrapup v2.8.0). `standards-history.yaml` tracks rule firings + promoted rules with slug-keyed identity (DAR 9 / wrapup v2.12.0). `handoff.yaml` + `changelog.yaml` are session-state logs consumed by `/leroy`'s navigator-recon via `yq '.entries[0]'`.
 
 ### Advisor cluster (~16 files, ~2,000 lines)
 

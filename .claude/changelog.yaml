@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./schemas/changelog.schema.json
 # Changelog — structured session log
 # Each entry is one session/branch. Newest first.
 # /leroy reads entries[0]; /wrapup prepends to the top of entries[].

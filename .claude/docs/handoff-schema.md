@@ -4,6 +4,8 @@ Schema reference for `.claude/handoff.yaml` — the session-state log. Each entr
 
 **Companion:** [`changelog-schema.md`](./changelog-schema.md) — the structured release-log that lives alongside this file.
 
+**Machine validation:** [`../schemas/handoff.schema.json`](../schemas/handoff.schema.json). The YAML file carries a `# yaml-language-server: $schema=...` header that wires VS Code's yaml-language-server (and other editors that honor the directive) to live-validate edits. CI can validate with `ajv-cli` or `yq` + an external validator.
+
 ## Reader / writer roles
 
 | Role | Operation |

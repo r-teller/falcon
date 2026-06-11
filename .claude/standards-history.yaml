@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=./schemas/standards-history.schema.json
+# Standards History — typed audit log of rule firings + promotion lifecycle.
+# Replaces legacy free-form standards-history.md.
+# /wrapup writes; manual yq queries audit.
+# Full schema reference: .claude/docs/standards-history-schema.md
+#
+# Reader pattern: yq '.firings[] | select(.rule_id == "<slug>")' .claude/standards-history.yaml
+# Writer pattern: yq -i '.firings = [{new}] + .firings' .claude/standards-history.yaml  (newest-first)
+#
+# Rules are keyed by stable slug (auto-generated from title at promotion, manually
+# overridable). Slugs never change; section_ref (presentational §X.Y label) can.
+
+schema_version: 1
+
+# Per-rule metadata, keyed by stable slug.
+# Each rule's section in .claude/rules/development-standards.md uses the slug as anchor.
+rules: {}
+
+# Time-ordered firings (newest-first). Each firing IS one audit event.
+# `rule_id` MUST reference a key in `rules` above.
+firings: []

@@ -2,6 +2,26 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.3.0 (2026-06-10)
+
+**Required Context contract integration — dispatch yaml carries `required_context[]`; worker reports `unlisted_context_reads[]`.** Aligns falcon with the hydrated-bead contract introduced in `.claude/docs/work-item-templates.md` (new `## Required Context` section spec) and consumed by `navigator-recon` v1.4.0.
+
+### Dispatch yaml schema additions (REFERENCE.md)
+
+- New field `required_context[]` on the dispatch yaml — populated by steering at Step 2 (Write Dispatch File) via parsing each bead's `## Required Context` section. Union deduped, source-order preserved. Empty list is valid for all-`cynefin:clear` dispatches (atomic execution from Changes Needed alone). Under-hydrated `cynefin:complicated` / `cynefin:complex` beads should not reach dispatch — the readiness checklist hard-binds.
+- New field `unlisted_context_reads[]` per-bead inside `implementation_results.beads[]` — workers record every `.claude/*.md` file they had to Read mid-execution that was NOT in the dispatch's `required_context[]`. Each entry is structured signal of bead under-hydration. Empty list is the expected normal for well-hydrated beads.
+
+### PROTOCOL.md additions
+
+- Step 2 (Write Dispatch File): bullet 1 lists the bash one-liner for steering to populate `required_context[]` from bead bodies via `bd show` + awk + grep. Cross-references the readiness-checklist hard-bind.
+- Worker Lifecycle Step 2b (NEW): worker Reads each `.claude/*.md` file named in `required_context[]` BEFORE writing implementation_intent. The point is to enter intent-confirm with the same context envelope steering had at /leroy. Under-hydration handling: if `required_context[]` is empty AND any bead is `complicated`/`complex`, worker tracks ad-hoc Reads into `unlisted_context_reads[]` for /wrapup absorption.
+
+### /wrapup integration
+
+- `wrapup.md` v2.9.0 Task 4 absorbs each `unlisted_context_reads[]` entry as a `kind: doc_gap` enhancement targeting `bd:<bead_id>` (the bead itself; the gap is in the bead spec, not the doc). Closes the hydration-discipline learning loop: under-hydration → ad-hoc Reads → structured doc_gaps → next-similar-bead's Required Context tightens.
+
+Companion changes: `navigator-recon` v1.4.0 (Step 5 rewrite consuming bead `## Required Context` directly); `work-item-templates.md` Readiness Checklist new line (hard-bind `complicated`/`complex` items on Required Context).
+
 ## 7.2.0 (2026-05-27)
 
 **Cron prompt condensation + REFERENCE.md tripwire-fired three-file split (fdev-b2f + fdev-3h2).** Two related changes that bundle naturally: a ~85% token-cost reduction on every steering-side `CronCreate` call, and a structural reorganization that splits `REFERENCE.md` into three single-purpose files now that the documented 1500-line tripwire fired.

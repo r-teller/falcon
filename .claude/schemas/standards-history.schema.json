@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falcon/schemas/standards-history.schema.json",
+  "title": "Falcon Standards History",
+  "description": "Typed audit log of rule firings + promotion lifecycle: .claude/standards-history.yaml. Replaces legacy free-form standards-history.md (per DAR 9). Rules keyed by stable slug; section_ref is presentational and can change. Companion doc: .claude/docs/standards-history-schema.md.",
+  "type": "object",
+  "required": ["schema_version", "rules", "firings"],
+  "properties": {
+    "schema_version": {
+      "description": "Schema version for forward compatibility.",
+      "type": "integer",
+      "const": 1
+    },
+    "rules": {
+      "description": "Per-rule metadata, keyed by stable slug (kebab-case, auto-generated from title at promotion, manually overridable). Slug never changes; section_ref can.",
+      "type": "object",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*[a-z0-9]$": { "$ref": "#/$defs/rule" }
+      },
+      "additionalProperties": false
+    },
+    "firings": {
+      "description": "Time-ordered firings (newest-first). Each firing references a rule slug.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/firing" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "required": ["section_ref", "title", "promoted_date", "promoted_from_bead"],
+      "properties": {
+        "section_ref": {
+          "description": "Current label in rules/development-standards.md (presentational; may change on renumber).",
+          "type": "string",
+          "pattern": "^§[0-9]+(\\.[0-9]+)*[a-z]?$"
+        },
+        "title": {
+          "description": "Human-readable rule title.",
+          "type": "string",
+          "minLength": 1
+        },
+        "promoted_date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "promoted_from_bead": {
+          "description": "Bead whose retro triggered promotion.",
+          "type": "string"
+        },
+        "promoted_from_firings": {
+          "description": "Optional but recommended provenance: enhancements.yaml entry IDs that drove the 3+ firings threshold.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]{8}-[0-9]+$"
+          }
+        },
+        "deprecation_status": {
+          "description": "null = active. Otherwise: 'deprecated YYYY-MM-DD: <reason>' OR 'split into <slug-a>, <slug-b> (YYYY-MM-DD)' OR 'merged into <slug> (YYYY-MM-DD)'.",
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "firing": {
+      "type": "object",
+      "required": ["id", "date", "rule_id", "fired_correctly", "bead_id", "action_taken", "context"],
+      "properties": {
+        "id": {
+          "description": "Sequential within date: YYYYMMDD-N.",
+          "type": "string",
+          "pattern": "^[0-9]{8}-[0-9]+$"
+        },
+        "date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "rule_id": {
+          "description": "MUST reference a key in rules{} above.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$"
+        },
+        "section_ref_at_firing": {
+          "description": "Optional audit trail across renumbers: what the rule was called at firing time.",
+          "type": "string",
+          "pattern": "^§[0-9]+(\\.[0-9]+)*[a-z]?$"
+        },
+        "fired_correctly": {
+          "description": "false signals deviation/misapplication — useful signal for rule misunderstanding.",
+          "type": "boolean"
+        },
+        "bead_id": {
+          "description": "Bead this firing occurred on.",
+          "type": "string"
+        },
+        "dispatch_id": {
+          "description": "Falcon dispatch ID for synthesis-mode firings. Null for direct-work.",
+          "type": ["string", "null"]
+        },
+        "commit_sha": {
+          "description": "Optional commit where the firing manifested.",
+          "type": ["string", "null"],
+          "pattern": "^([0-9a-f]{7,40})?$"
+        },
+        "action_taken": {
+          "type": "string",
+          "enum": ["followed", "deviation", "flagged"]
+        },
+        "context": {
+          "description": "Multi-line block scalar narrative — preserve fidelity from prior markdown form.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

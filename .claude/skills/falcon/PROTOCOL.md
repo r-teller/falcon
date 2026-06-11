@@ -110,6 +110,15 @@ Before writing the dispatch file, check the lock registry:
 1. Write a per-dispatch YAML file at `.claude/tmp/falcon-dispatch-<6hex>.yaml` containing:
    - `dispatch_id`, `bead_ids[]`, `branch`, `repo_path`, `file_scope` (from Step 1, optionally expanded in Step 1b)
    - `session_status: active` — set by steering; worker checks on resume prompts; transitions: `active → amendments_pending → complete` (steering sets complete via `/falcon release`)
+   - `required_context[]` (v7.2.0+): union of `.claude/*.md` file paths from each bead's `## Required Context` section. Populate via:
+
+     ```bash
+     for id in "${BEAD_IDS[@]}"; do
+       bd show "$id" | awk '/^## Required Context/,/^## /' | grep -oE '\.claude/[a-zA-Z_/-]+\.md(\s+§\s+"[^"]*")?'
+     done | awk '!seen[$0]++'   # dedupe, preserve first-seen order
+     ```
+
+     Empty list is valid for all-`cynefin:clear` dispatches. Under-hydrated `cynefin:complicated` / `cynefin:complex` beads should NOT reach this stage — the readiness checklist in `.claude/docs/work-item-templates.md` hard-binds against it. If a worker reports `unlisted_context_reads[]` entries in its return contract, /wrapup Task 4 absorbs each as a `kind: doc_gap` enhancement against the originating bead.
    - `init_prompt` section: the full lifecycle + project-rules + return-contract content per the "init_prompt Content Template" in [`REFERENCE.md`](./REFERENCE.md) (this is the worker's binding spec — read it before any state change)
    - Empty placeholder sections: `implementation_intent: null`, `out_of_spec_approval_requests: []`, `implementation_results: null`, `implementation_results_hash: null`, `amendments: []`
 2. Print a SHORT prompt for the user to paste into the worker session (per the "Dispatch Prompt Template" in [`REFERENCE.md`](./REFERENCE.md)).
@@ -1227,6 +1236,15 @@ Use paste mode as a fallback, not a default.
    **`/rename` for session identity (v7.0.0+; canonical mechanism for `--via-paste` and `--paste` modes):** as the first action after branch verify, run the `/rename falcon-<dispatch-id>` slash command so the session shows up correctly in `claude agents` (when available) and on the prompt bar. This replaces the prior tmux/printf/IDE-bullet terminal-title approach (which silently failed across most real-world setups — see P5.1 in the v7.0.0 changelog for the failure-mode catalog). `--bg` mode does NOT need this step because `claude --bg --name "falcon-<dispatch-id>"` already sets the session name at spawn time.
 
 2. For each bead: `bd show <id>` to load the full body; confirm `triage:ready`.
+
+2b. **Required Context load (v7.2.0+):** read the dispatch file's `required_context[]` field (populated by steering at Step 2 from each bead's `## Required Context` section per `.claude/docs/work-item-templates.md`). For each entry, `Read` the named `.claude/*.md` file before writing implementation_intent. If a path contains an explicit `§ <anchor>` suffix, that's a doc-author hint to focus on the named section — read with `offset` / `limit` around that section's heading after a first pass to locate it.
+
+   The point is to enter intent-confirm with the same context envelope the steering session would have had at /leroy startup. Workers that skip this step write intents grounded in title-keyword guessing rather than the contracts the bead is bound to preserve.
+
+   If `required_context[]` is empty AND all beads in this dispatch are `cynefin:clear`: skip with no warning (atomic execution is the intended contract).
+
+   If `required_context[]` is empty AND any bead is `cynefin:complicated` / `cynefin:complex`: this is an under-hydration signal — the bead should not have reached `triage:ready` per the readiness checklist. Proceed with execution but during the bead body parse, look for `.claude/*.md` references inline AND track every ad-hoc `.claude/*.md` Read into the worker's `unlisted_context_reads[]` field on the eventual report. Steering's /wrapup will absorb each as a `kind: doc_gap` entry against the originating bead.
+
 3. **Intent confirmation (default; skip if `skip_intent: true` directive present, OR if `intent_acknowledged_utc` is already non-null on this resume — see auto-ack-resume guard below):** emit single-paragraph intent including one-sentence approach. Write to `implementation_intent` field AND emit wrapped in labeled-copy convention. STOP, await steering "proceed" ack.
 
    **Dispatch-identity header (v6.12.1; mandatory):** prepend a 2-line identity header INSIDE the INTENT fence, ABOVE the intent paragraph: `Working dispatch <id> on branch <branch>` on the first line, `Beads: [<bead-id>: "<title>", ...]` on the second (titles abbreviated to ~40 chars each if long). Rationale: when the user has multiple worker tabs open across concurrent dispatches, this is the last visual checkpoint where a wrong-dispatch-paste shows up — if the dispatch ID, branch, or bead titles don't match what the user expected for this tab, they reject the paste with a corrective revision instead of typing `proceed <id>`. The header is doc-only; steering does not parse the INTENT format. See REFERENCE.md "## Copy-Paste Emission Convention" and "## Dispatch Prompt Template" for the format example. This is Safeguard B of the worker-side wrong-paste-detection design (Safeguard A — `worker_session_id` field + claim mechanic — is tracked in example-r3q9 for separate Phase-N treatment).

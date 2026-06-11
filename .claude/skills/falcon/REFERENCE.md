@@ -323,6 +323,22 @@ file_scope:
     - "<file path>"
   # No glob patterns supported
 
+required_context:        # v7.2.0+: explicit context-file list copied from each bead's
+                         # `## Required Context` section (per .claude/docs/work-item-templates.md).
+                         # Steering populates at dispatch time via:
+                         #   bd show <id> | awk '/^## Required Context/,/^## /' | grep -oE '\.claude/[a-zA-Z_/-]+\.md'
+                         # Union across all bead_ids, deduped, preserve source order.
+                         # Worker reads each file BEFORE writing implementation_intent
+                         # (intent-confirm step), so the intent reflects context-grounded
+                         # understanding rather than blind execution.
+                         # Empty list is valid for all-cynefin:clear dispatches (atomic beads
+                         # need no preemptive context). Under-hydrated cynefin:complicated/complex
+                         # beads should NOT reach this stage — they fail the readiness gate
+                         # in work-item-templates.md. If they do (e.g., legacy beads), worker
+                         # records ad-hoc reads in unlisted_context_reads[] per bead (below).
+  - ".claude/security.md"
+  - ".claude/data-model.md § User model"
+
 init_prompt: |
   <multi-line string containing the worker's binding spec:
    lifecycle, bead set (pointer or inline per --inline-beads),
@@ -720,6 +736,19 @@ falcon_report:
         notes: "<phase variance, if any>"
       ac_status: "all_passed | partial | failed"
       ac_failures: []   # list AC items not satisfied if partial/failed
+      unlisted_context_reads:   # v7.2.0+: .claude/*.md files the worker had to read DURING
+                                # execution that were NOT named in the bead's `## Required
+                                # Context` section (and therefore not in the dispatch's
+                                # required_context[]). Each entry is signal that the bead
+                                # was under-hydrated — the bead author missed naming a
+                                # context dependency the work actually needed. /wrapup
+                                # Task 4 absorbs each as a kind:doc_gap entry against the
+                                # originating bead so future similar beads get the
+                                # Required Context section tightened up.
+                                # Empty list is the expected normal — well-hydrated beads
+                                # need no ad-hoc reads.
+        - path: ".claude/styleguide.md"
+          reason: "<one sentence — why this file was needed mid-execution>"
 
   discovered_beads:
     - id: "<id-or-pending>"
