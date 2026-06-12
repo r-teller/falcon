@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Velocity Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--surface2:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--amber:#d29922;--purple:#bc8cff;--teal:#39d2c0}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px;line-height:1.5}
+h1{font-size:24px;margin-bottom:4px}
+h2{font-size:18px;margin:32px 0 16px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:8px}
+h3{font-size:14px;color:var(--muted);margin:16px 0 8px;text-transform:uppercase;letter-spacing:.5px}
+.sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+.grid{display:grid;gap:24px}.grid-2{grid-template-columns:1fr 1fr}.grid-3{grid-template-columns:1fr 1fr 1fr}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px}
+.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:24px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;flex:1;min-width:120px}
+.stat-value{font-size:28px;font-weight:700}.stat-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}.stat-sub{font-size:11px;color:var(--muted);margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;border-bottom:2px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+td{padding:8px 12px;border-bottom:1px solid var(--border)}tr:hover td{background:var(--surface2)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-bug{background:rgba(248,81,73,.15);color:var(--red)}.badge-feature{background:rgba(88,166,255,.15);color:var(--accent)}.badge-chore{background:rgba(63,185,80,.15);color:var(--green)}.badge-decision{background:rgba(210,153,34,.15);color:var(--amber)}
+.badge-s{background:rgba(63,185,80,.15);color:var(--green)}.badge-m{background:rgba(210,153,34,.15);color:var(--amber)}.badge-l{background:rgba(248,81,73,.15);color:var(--red)}
+.progress-bar{height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin-top:4px}.progress-fill{height:100%;border-radius:4px}
+.phase-bar{display:flex;height:28px;border-radius:4px;overflow:hidden;margin:8px 0}
+.phase-bar>div{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;min-width:30px}
+.callout{background:var(--surface2);border-left:3px solid var(--amber);padding:12px 16px;margin:12px 0;font-size:13px;color:var(--muted);border-radius:0 4px 4px 0}
+.callout-red{border-left-color:var(--red)}.callout-green{border-left-color:var(--green)}.callout-purple{border-left-color:var(--purple)}
+.chart-container{position:relative;height:280px}.chart-wide{position:relative;height:320px}
+#load-section{text-align:center;padding:60px 20px;border:2px dashed var(--border);border-radius:12px;margin:40px 0}
+#load-section label{cursor:pointer;background:var(--accent);color:#fff;padding:12px 24px;border-radius:8px;font-size:16px;font-weight:600}
+#load-section label:hover{opacity:.9}
+#load-section input{display:none}
+#dashboard{display:block}
+.slider-container{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:24px}
+.slider-container input[type=range]{width:100%;accent-color:var(--accent);margin:8px 0}
+.slider-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+.slider-current{text-align:center;font-size:14px;margin-bottom:8px}
+.tip{position:relative;display:inline-block;margin-left:10px;width:20px;height:20px;border-radius:4px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-size:12px;text-align:center;line-height:20px;cursor:help;vertical-align:middle;font-weight:400}
+.tip:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.tip-box{display:none;position:absolute;left:28px;top:-8px;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:16px 20px;border-radius:8px;font-size:13px;line-height:1.6;width:380px;z-index:100;white-space:normal;font-weight:400;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.tip:hover .tip-box{display:block}
+.tip-box strong{display:block;font-size:14px;color:var(--accent);margin-bottom:6px}
+.tip-box em{color:var(--green);font-style:normal;font-weight:600}
+.tip-box .tip-target{display:inline-block;margin-top:8px;padding:3px 8px;border-radius:4px;background:rgba(63,185,80,.1);color:var(--green);font-size:12px}
+@media(max-width:900px){.grid-2,.grid-3{grid-template-columns:1fr}.stat-row{flex-direction:column}}
+
+.chart-subtitle{display:block;margin:-4px 0 10px;font-size:11.5px;color:var(--muted);line-height:1.5;font-weight:400}
+.methodology-footer{margin-top:48px;padding:24px;background:var(--surface2);border:1px solid var(--border);border-radius:8px}
+.methodology-footer h2{margin-top:0;font-size:18px}
+.methodology-footer h3{font-size:13px;color:var(--accent);margin:16px 0 6px;text-transform:uppercase;letter-spacing:.5px}
+.methodology-footer p{font-size:12.5px;color:var(--muted);line-height:1.7;margin:0 0 10px}
+.methodology-footer code{background:var(--surface);padding:1px 6px;border-radius:3px;color:var(--text);font-size:11.5px}
+
+.row-toggle{display:flex;justify-content:space-between;align-items:center;padding:8px 4px 0;font-size:12px;color:var(--muted);border-top:1px dashed var(--border);margin-top:6px}
+.row-toggle button{background:transparent;border:1px solid var(--border);color:var(--accent);padding:4px 12px;border-radius:4px;font-size:11.5px;cursor:pointer;font-family:inherit}
+.row-toggle button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.row-hidden{display:none}
+</style>
+</head>
+<body>
+
+<h1>Velocity Report</h1>
+<p class="sub" id="report-subtitle">Velocity Report — load metrics.jsonl to begin</p>
+
+<!-- FILE LOADER -->
+<div id="load-section" style="display:none"></div>
+
+<!-- DASHBOARD (hidden until data loaded) -->
+<div id="dashboard">
+
+<!-- SPRINT SLIDER -->
+<div class="slider-container">
+  <div class="slider-current" id="slider-label">All sprints</div>
+  <input type="range" id="slider-range" min="1" max="1" value="1" style="width:100%;accent-color:var(--accent);margin:8px 0">
+  <div class="slider-labels"><span>1 sprint</span><span id="slider-max">All</span></div>
+</div>
+
+<!-- TOP STATS -->
+<div class="stat-row" id="top-stats"></div>
+
+<!-- 1. SPRINT COMPARISON -->
+<h2>1. Sprint Comparison<span class="tip">?<div class="tip-box"><strong>Sprint Comparison</strong>Side-by-side view of every sprint. Shows commitment discipline (hit%), scope management (creep%), and execution efficiency (impl%, tok/turn).<br><br>The primary table for spotting trends across sprints.<span class="tip-target">Use for: sprint retrospectives</span></div></span></h2>
+<div class="card"><table><thead><tr>
+  <th>Sprint</th><th>Date</th>
+  <th class="num">Commit</th><th class="num">Done</th><th class="num">C/Over</th><th class="num">Discov</th>
+  <th class="num">Hit%</th><th class="num">Creep%</th>
+  <th class="num">Turns</th><th class="num">Impl%</th><th class="num">Tok/Turn</th>
+</tr></thead><tbody id="sprint-table"></tbody></table></div>
+
+<!-- 2. SPRINT VELOCITY TREND -->
+<h2>2. Sprint Velocity Trend<span class="tip">?<div class="tip-box"><strong>Sprint Velocity Trend</strong>Projected vs Actual decomposes each sprint into:<br>&#8226; <em>Blue</em> = forecasted effort<br>&#8226; <em>Amber</em> = sizing overruns<br>&#8226; <em>Purple</em> = unplanned discovered work<br><br>Below: bead composition by type and origin.<span class="tip-target">Shows: are sprints predictable or consistently blown?</span></div></span></h2>
+<div class="card"><h3>Projected vs Actual Effort <span class="tip">?<div class="tip-box"><strong>Projected vs Actual Effort</strong><strong>How computed:</strong> Forecast = sum of bead-level Effort Forecast totals for `committed` rows where phase=implement. Actual = sum of <em>actual_output_tokens</em> per sprint.<br><br><strong>How to read:</strong> Blue ≈ committed plan; amber on top = sizing overruns; purple = unplanned discovered work. Persistent overrun → forecast calibration drifting.<br><span class='tip-target'>Healthy: overrun + discovered &lt; 30% of forecast</span></div></span></h3><span class="chart-subtitle">Per-sprint stacked bar: forecasted tokens (blue) vs delivered (amber overrun + purple discovered).</span><div class="chart-wide"><canvas id="proj-actual"></canvas></div></div>
+<div class="grid grid-2" style="margin-top:24px">
+  <div class="card"><h3>Beads per Sprint (by type) <span class="tip">?<div class="tip-box"><strong>Beads per Sprint (by type)</strong><strong>How computed:</strong> Count of unique <em>bead_id</em> per (sprint, issue_type).<br><br><strong>How to read:</strong> Watch the mix. A sprint with mostly `bug` beads = stabilization; mostly `feature` = greenfield delivery. Persistent `chore` dominance = tech-debt sprint.</div></span></h3><span class="chart-subtitle">Bead count per sprint, stacked by issue_type (feature / bug / chore / decision / epic / task).</span><div class="chart-container"><canvas id="beads-type"></canvas></div></div>
+  <div class="card"><h3>Committed vs Discovered <span class="tip">?<div class="tip-box"><strong>Committed vs Discovered</strong><strong>How computed:</strong> `committed` and `carryover` beads counted from the sprint's plan; `discovered` from <em>origin=discovered</em> rows; `added` (mid-sprint scope additions) shown separately.<br><br><strong>How to read:</strong> Lots of discovered = under-spec'd backlog; lots of added = scope discipline issue. Together they signal planning health.</div></span></h3><span class="chart-subtitle">Per sprint: planned-at-start vs surfaced-mid-sprint work, by bead count.</span><div class="chart-container"><canvas id="origin-stack"></canvas></div></div>
+</div>
+
+<!-- 3. PO EFFICIENCY -->
+<h2>3. Product Owner Efficiency<span class="tip">?<div class="tip-box"><strong>Product Owner Efficiency</strong>Measures your decisions as the person driving the team:<br>&#8226; <em>Scope Creep</em> &#8212; are discovered beads growing?<br>&#8226; <em>Predictability</em> &#8212; is sprint size consistent?<br>&#8226; <em>Work Mix</em> &#8212; right type/size balance for throughput?<span class="tip-target">Target: CV &lt; 30%, creep &lt; 25%</span></div></span></h2>
+<div class="grid grid-3">
+  <div class="card"><h3>Scope Creep Trend <span class="tip">?<div class="tip-box"><strong>Scope Creep Trend</strong><strong>How computed:</strong> (discovered_turns + added_turns) / total_turns per sprint, plotted over time.<br><br><strong>How to read:</strong> One spike = an event (e.g., production fire). Sustained climb = chronic under-planning.<br><span class='tip-target'>Healthy: &lt; 25%, alarm: &gt; 50%</span></div></span></h3><span class="chart-subtitle">% of each sprint's effort spent on work that wasn't in the original plan.</span><div class="chart-container"><canvas id="creep-line"></canvas></div></div>
+  <div class="card"><h3>Throughput Predictability <span class="tip">?<div class="tip-box"><strong>Throughput Predictability</strong><strong>How computed:</strong> Each bar = one sprint's total turns. The line shows the running average so deviations stand out.<br><br><strong>How to read:</strong> Bars that all look similar = predictable team. Wild swings → forecasting is guessing.<br><span class='tip-target'>Predictable: coefficient of variation &lt; 30%</span></div></span></h3><span class="chart-subtitle">Sprint-to-sprint variance in completed turns. Lower is more predictable.</span><div class="chart-container"><canvas id="predict-chart"></canvas></div></div>
+  <div class="card"><h3>Work Mix <span class="tip">?<div class="tip-box"><strong>Work Mix</strong><strong>How computed:</strong> Sum of turns grouped by issue_type across all visible sprints.<br><br><strong>How to read:</strong> Healthy product teams typically run 50–70% feature, 15–25% bug, 15–25% chore. Outside that → check why.</div></span></h3><span class="chart-subtitle">Cumulative donut: share of turns across feature / bug / chore / decision / epic.</span><div class="chart-container"><canvas id="mix-donut"></canvas></div></div>
+</div>
+
+<!-- 4. BUG TRENDS -->
+<h2>4. Bug Trends<span class="tip">?<div class="tip-box"><strong>Bug Trends</strong>Tracks bug volume and ratio over time.<br><br>Rising bug count signals quality degradation or growing codebase complexity. Bug ratio (bugs/total beads) normalizes for sprint size.<span class="tip-target">Watch for: sustained upward trend</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Bugs per Sprint <span class="tip">?<div class="tip-box"><strong>Bugs per Sprint</strong><strong>How computed:</strong> Distinct bead_id count where issue_type=bug per sprint.<br><br><strong>How to read:</strong> A sustained climb signals quality erosion or growing complexity. Stable count = quality holding.</div></span></h3><span class="chart-subtitle">Count of `bug` beads closed per sprint.</span><div class="chart-container"><canvas id="bugs-bar"></canvas></div></div>
+  <div class="card"><h3>Bug Ratio <span class="tip">?<div class="tip-box"><strong>Bug Ratio</strong><strong>How computed:</strong> bugs / total_beads per sprint.<br><br><strong>How to read:</strong> Trending up while features stay flat = compounding defects. Spike-then-recover = isolated incident.<br><span class='tip-target'>Healthy: 15–25%</span></div></span></h3><span class="chart-subtitle">Bugs as % of all closed beads per sprint — normalizes for sprint size.</span><div class="chart-container"><canvas id="bug-ratio"></canvas></div></div>
+</div>
+
+<!-- 5. DEFECT ESCAPE RATE -->
+<h2>5. Defect Escape Rate<span class="tip">?<div class="tip-box"><strong>Defect Escape Rate</strong>Every bug traces back to a source bead via <em>discovered_from</em>. Shows which beads produced the most downstream defects.<br><br>High escape rate = verification was insufficient when the source bead was closed.<span class="tip-target">Target: &lt; 5% of closed beads produce escapes</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Escaped Bugs by Source <span class="tip">?<div class="tip-box"><strong>Escaped Bugs by Source</strong><strong>How computed:</strong> Group bugs by their <em>discovered_from</em> bead and count.<br><br><strong>How to read:</strong> Top bars are your highest-risk beads — verification was insufficient when they closed. Use as a backlog for retroactive test-coverage work.</div></span></h3><span class="chart-subtitle">For each source bead, count of downstream bugs that traced back to it via `discovered_from`.</span><div class="chart-wide"><canvas id="escape-bar"></canvas></div></div>
+  <div class="card"><h3>Escape Summary <span class="tip">?<div class="tip-box"><strong>Escape Summary</strong><strong>How computed:</strong> Total escaped bugs, unique source beads, escape rate = unique_sources / total_beads.<br><br><strong>How to read:</strong> Aim for &lt;5% escape rate. Higher = invest in stronger verification at close-time.</div></span></h3><span class="chart-subtitle">Project-wide escape stats: how many beads produced downstream defects.</span><div id="escape-summary"></div></div>
+</div>
+
+<!-- 6. TOKENS vs TURNS -->
+<h2>6. Tokens vs Turns<span class="tip">?<div class="tip-box"><strong>Tokens vs Turns</strong>Turns measure interaction count. Tokens measure compute cost.<br><br><em>Token density</em> (tokens/turn) shows whether each interaction is getting heavier or lighter. Rising density may indicate more complex work or richer code generation.<span class="tip-target">Watch for: sustained upward trend in density</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Output Tokens per Sprint <span class="tip">?<div class="tip-box"><strong>Output Tokens per Sprint</strong><strong>How computed:</strong> Sum of <em>actual_output_tokens</em> across all rows in each sprint.<br><br><strong>How to read:</strong> Bar height = how much the model produced. Cost in $ scales linearly. Big sprints, small features → density may be off.</div></span></h3><span class="chart-subtitle">Total assistant-generated tokens (a proxy for AI work volume) per sprint.</span><div class="chart-container"><canvas id="tokens-bar"></canvas></div></div>
+  <div class="card"><h3>Token Density (tokens/turn) <span class="tip">?<div class="tip-box"><strong>Token Density (tokens/turn)</strong><strong>How computed:</strong> sum(output_tokens) / sum(turns) per sprint.<br><br><strong>How to read:</strong> Rising density = each step is producing more code/text (richer work). Sudden drop = work shifted to many tiny steps.</div></span></h3><span class="chart-subtitle">Average tokens emitted per assistant turn — how 'heavy' each interaction is.</span><div class="chart-container"><canvas id="density-line"></canvas></div></div>
+</div>
+
+<!-- 7. AGENT PERFORMANCE -->
+<h2>7. Agent Performance<span class="tip">?<div class="tip-box"><strong>Agent Performance</strong><em>Velocity heatmap</em> shows average turns by type &times; size &#8212; use for effort forecasting.<br><br><em>Turns/bead trend</em> shows whether the agent is getting faster or slower over time.<span class="tip-target">Decreasing turns/bead = improving efficiency</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Velocity by Type x Size <span class="tip">?<div class="tip-box"><strong>Velocity by Type x Size</strong><strong>How computed:</strong> Average turns and output_tokens grouped by (type, size). N = bead count in cell.<br><br><strong>How to read:</strong> Use as a forecasting table — when sizing a new bead, look up its type+size and start from these averages.</div></span></h3><span class="chart-subtitle">Heatmap-style table: avg turns + tokens for each (issue_type, issue_size) combination.</span><div class="chart-wide"><canvas id="velocity-grouped"></canvas></div></div>
+  <div class="card"><h3>Turns per Bead Over Time <span class="tip">?<div class="tip-box"><strong>Turns per Bead Over Time</strong><strong>How computed:</strong> total_turns / bead_count per sprint.<br><br><strong>How to read:</strong> Falling line = team getting faster per bead (whether through experience or AI improvement). Rising = work getting harder or sizing slipping.</div></span></h3><span class="chart-subtitle">Average turns per closed bead, plotted by sprint.</span><div class="chart-wide"><canvas id="turns-line"></canvas></div></div>
+</div>
+
+<!-- 8. VELOCITY REFERENCE -->
+<h2>8. Velocity Reference<span class="tip">?<div class="tip-box"><strong>Velocity Reference</strong>Lookup table for effort estimation. When sizing a new bead, find its type and size here to see historical averages.<br><br>Use these averages for effort forecasts on new beads.<span class="tip-target">How to use: consult before writing Effort Forecast</span></div></span></h2>
+<div class="card"><table><thead><tr><th>Type</th><th>Size</th><th class="num">Avg Turns</th><th class="num">Avg Tokens</th><th class="num">N</th><th>Bar</th></tr></thead><tbody id="vel-table"></tbody></table></div>
+
+<!-- 9. PHASE DISTRIBUTION -->
+<h2>9. Phase Distribution<span class="tip">?<div class="tip-box"><strong>Phase Distribution</strong>Shows where time goes across all work:<br>&#8226; <em>Coordinate</em> &#8212; batch planning<br>&#8226; <em>Plan</em> &#8212; per-bead scoping<br>&#8226; <em>Implement</em> &#8212; writing code<br>&#8226; <em>Test</em> &#8212; verification<br><br>High plan% = specs need more detail. High test% = frequent rework.<span class="tip-target">Target: implement &gt; 70%</span></div></span></h2>
+<div class="card"><div class="phase-bar" id="phase-bar"></div>
+<div id="phase-legend" style="display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--muted)"></div></div>
+
+<!-- 10. LEAD TIME & CYCLE TIME -->
+<h2>10. Lead Time &amp; Cycle Time<span class="tip">?<div class="tip-box"><strong>Lead Time &amp; Cycle Time</strong><em>Lead time</em>: days from bead creation to close &#8212; how long work sits before completing.<br><br><em>Cycle time</em>: minutes from first claim to close &#8212; active work duration by size.<span class="tip-target">Same-day lead time = beads completed in one sprint</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Lead Time (created to closed) <span class="tip">?<div class="tip-box"><strong>Lead Time (created to closed)</strong><strong>How computed:</strong> closed_at − bead_created_at, in days.<br><br><strong>How to read:</strong> Short lead time = beads completed quickly. Long tail = work sitting in backlog. Same-day = one-and-done sprints.<br><span class='tip-target'>Compare across sizes — large beads naturally have longer lead time</span></div></span></h3><span class="chart-subtitle">How long beads sit before completing — days from bead creation to close.</span><div class="chart-container"><canvas id="lead-bar"></canvas></div></div>
+  <div class="card"><h3>Cycle Time by Size <span class="tip">?<div class="tip-box"><strong>Cycle Time by Size</strong><strong>How computed:</strong> stopped − first_claimed_at, averaged within small/medium/large.<br><br><strong>How to read:</strong> Cycle time should scale with size. If small ≈ medium, sizing is broken.</div></span></h3><span class="chart-subtitle">Active work duration (claim to close) bucketed by bead size.</span><div class="chart-container"><canvas id="cycle-bar"></canvas></div></div>
+</div>
+
+<!-- 11. FORECAST ACCURACY -->
+<h2>11. Forecast Accuracy<span class="tip">?<div class="tip-box"><strong>Forecast Accuracy</strong>Compares predicted effort vs actual turns.<br><br><em>Accuracy</em> = min(forecast,actual) / max(forecast,actual). 100% = perfect prediction.<br><br>Distribution shows calibration quality. Scatter: dots above y=x line were under-estimated.<span class="tip-target">Target: &gt; 80% average accuracy</span></div></span></h2>
+<div class="stat-row" id="acc-stats"></div>
+<div class="grid grid-2">
+  <div class="card"><h3>Accuracy Distribution <span class="tip">?<div class="tip-box"><strong>Accuracy Distribution</strong><strong>How computed:</strong> accuracy = min(forecast, actual) / max(forecast, actual) per bead. Bucketed into ranges.<br><br><strong>How to read:</strong> Healthy team's mass clusters at 70–100%. A heavy left tail means many sized-wrong beads.</div></span></h3><span class="chart-subtitle">Histogram of forecast accuracy across beads. 100% = perfect prediction.</span><div class="chart-container"><canvas id="acc-dist"></canvas></div></div>
+  <div class="card"><h3>Forecast vs Actual <span class="tip">?<div class="tip-box"><strong>Forecast vs Actual</strong><strong>How computed:</strong> One dot per bead with forecast and actual implement turns.<br><br><strong>How to read:</strong> Dots above the y=x line were under-estimated; below = over-estimated. Tight band around the line = calibrated forecasts.<br><span class='tip-target'>Hover any dot for the bead ID + numbers</span></div></span></h3><span class="chart-subtitle">Scatter: each dot = one closed bead. X = forecasted turns, Y = actual turns.</span><div class="chart-container"><canvas id="acc-scatter"></canvas></div></div>
+</div>
+
+<!-- 12. HUMAN-AI FLOW -->
+<h2>12. Human-AI Flow<span class="tip">?<div class="tip-box"><strong>Human-AI Flow</strong>Measures how session time splits between AI and human.<br><br><em>Flow%</em> = AI active / (AI + human active). Higher = more autonomous AI.<br><br><em>Drift risk</em>: sessions with &gt;50% away time risk stale context &#8212; human may redirect on return, causing rework.<span class="tip-target">Target: 85%+ flow efficiency</span></div></span></h2>
+<div class="stat-row" id="flow-stats"></div>
+<div class="grid grid-2">
+  <div class="card"><h3>Flow Efficiency Trend <span class="tip">?<div class="tip-box"><strong>Flow Efficiency Trend</strong><strong>How computed:</strong> ai_active_seconds / (ai_active_seconds + human_review_seconds), per sprint.<br><br><strong>How to read:</strong> High = autonomous AI; low = human-driven pair programming. Color-coded against 50% / 85% thresholds.<br><span class='tip-target'>Target: ≥ 85%</span></div></span></h3><span class="chart-subtitle">% of session time the AI was actively generating, vs waiting on human input.</span><div class="chart-wide"><canvas id="flow-trend"></canvas></div></div>
+  <div class="card"><h3>Time Composition per Sprint <span class="tip">?<div class="tip-box"><strong>Time Composition per Sprint</strong><strong>How computed:</strong> Aggregated session_time records per sprint. Gaps between messages bucketed via P75/P93/P97.7 percentile thresholds (project-adaptive).<br><br><strong>How to read:</strong> Tall AI-active bars = focused autonomous work. Tall away bars = fragmented sessions, context-loss risk.</div></span></h3><span class="chart-subtitle">Stacked time split: AI Active + Human Review + Think + Idle + Away minutes.</span><div class="chart-wide"><canvas id="time-comp"></canvas></div></div>
+</div>
+<div class="card" style="margin-top:24px">
+  <h3>Sprint Detail <span class="tip">?<div class="tip-box"><strong>Sprint Detail</strong><strong>Columns:</strong><br>&bull; <em>AI Active</em> — minutes the model was generating or tools were running<br>&bull; <em>Human Active</em> — quick review / response time (gap &lt; P75)<br>&bull; <em>Think</em> — deeper review (P75–P93)<br>&bull; <em>Idle</em> — context switch / short break (P93–P97.7)<br>&bull; <em>Away</em> — long break / overnight (&gt; P97.7), excluded from flow %<br>&bull; <em>Drift risk</em> — LOW / MEDIUM / HIGH based on flow % and away %</div></span></h3><span class="chart-subtitle">Per-sprint flow breakdown. Sortable table of all sprints with AI/human time split.</span>
+  <table><thead><tr>
+    <th>Sprint</th><th>Date</th>
+    <th class="num">AI Active</th><th class="num">Human Active</th><th class="num">Think</th><th class="num">Idle</th><th class="num">Away</th>
+    <th class="num">Flow%</th><th>Drift</th>
+  </tr></thead><tbody id="flow-table"></tbody></table>
+</div>
+
+<!-- 13. CYNEFIN DOMAIN ANALYSIS -->
+<h2>13. Cynefin Domain Analysis<span class="tip">?<div class="tip-box"><strong>Cynefin Domain Analysis</strong>Breaks down effort and forecast accuracy by Cynefin complexity domain.<br><br><em>Forecast Accuracy by Domain</em> &mdash; grouped bars comparing predicted vs actual turns per domain. Clear beads should be tight; complex beads (spikes) naturally overshoot.<br><br><em>Effort Distribution by Domain</em> &mdash; stacked bars showing turns per domain per sprint. Reveals whether work is concentrated in known territory (clear/complicated) or exploring unknowns (complex).<br><br><em>Domain Velocity Reference</em> &mdash; lookup table with avg turns, accuracy, and bead count per domain. Use for effort forecasting: multiply historical average by domain confidence multiplier (1x clear, 1.2-1.5x complicated, range for complex).<span class="tip-target">Use for: calibrating forecasts by complexity</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Forecast Accuracy by Domain <span class="tip">?<div class="tip-box"><strong>Forecast Accuracy by Domain</strong><strong>How computed:</strong> Average accuracy = min(forecast, actual) / max(forecast, actual) for each domain.<br><br><strong>How to read:</strong> Clear-domain beads should have tight accuracy; complex-domain (spikes) naturally overshoot. Mis-calibration shows up as low accuracy in a domain that should be easy.</div></span></h3><span class="chart-subtitle">Forecast accuracy grouped by Cynefin domain (clear / complicated / complex / chaotic).</span><div class="chart-container"><canvas id="cynefin-acc"></canvas></div></div>
+  <div class="card"><h3>Effort Distribution by Domain <span class="tip">?<div class="tip-box"><strong>Effort Distribution by Domain</strong><strong>How computed:</strong> Sum of turns grouped by (sprint, cynefin_domain).<br><br><strong>How to read:</strong> Lots of complex/chaotic = research-heavy sprint. Lots of clear = repeatable execution. The mix reveals what kind of sprint you ran.</div></span></h3><span class="chart-subtitle">Stacked bars per sprint: turns spent in each complexity domain.</span><div class="chart-container"><canvas id="cynefin-effort"></canvas></div></div>
+</div>
+<div class="card" style="margin-top:24px">
+  <h3>Domain Velocity Reference <span class="tip">?<div class="tip-box"><strong>Domain Velocity Reference</strong><strong>How to use:</strong> When forecasting a new bead, find its domain row and start from these averages. Apply a confidence multiplier: 1x clear, 1.2–1.5x complicated, range for complex.</div></span></h3><span class="chart-subtitle">Lookup table: average turns, accuracy, and bead count per Cynefin domain.</span>
+  <table><thead><tr><th>Domain</th><th class="num">Beads</th><th class="num">Avg Turns</th><th class="num">Avg Accuracy</th><th>Distribution</th></tr></thead><tbody id="cynefin-table"></tbody></table>
+</div>
+
+<!-- 14. LAYER ANALYSIS -->
+<h2>14. Layer Analysis<span class="tip">?<div class="tip-box"><strong>Layer Analysis</strong>Shows which architectural layers consume the most effort.<br><br>Identifies whether work is concentrated in one layer or distributed. Persistent imbalance may indicate tech debt accumulation in neglected layers.<span class="tip-target">Use for: spotting layer-specific bottlenecks</span></div></span></h2>
+<div class="grid grid-2">
+  <div class="card"><h3>Effort by Layer <span class="tip">?<div class="tip-box"><strong>Effort by Layer</strong><strong>How computed:</strong> Each bead's layers list contributes 1 share per layer to its turns. A bead spanning frontend + backend splits 50/50.<br><br><strong>How to read:</strong> Lopsided distribution may indicate tech debt accumulating in neglected layers.</div></span></h3><span class="chart-subtitle">Turns per architectural layer (frontend / backend / data / infra / workflow / test).</span><div class="chart-container"><canvas id="layer-effort"></canvas></div></div>
+  <div class="card"><h3>Layer Combinations <span class="tip">?<div class="tip-box"><strong>Layer Combinations</strong><strong>How computed:</strong> Count of beads grouped by the sorted layer-set tuple.<br><br><strong>How to read:</strong> Frequent cross-layer pairs = tight coupling between layers. If 'frontend+backend' dominates, your contracts may be drifting.</div></span></h3><span class="chart-subtitle">Frequency of multi-layer beads (e.g., frontend+backend together).</span><div class="chart-container"><canvas id="layer-combos"></canvas></div></div>
+</div>
+
+<div style="margin-top:48px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:11px" id="footer"></div>
+
+</div><!-- /dashboard -->
+
+
+
+<!-- 15. MODEL & COST BREAKDOWN -->
+<h2>15. Model &amp; Cost Breakdown<span class="tip">?<div class="tip-box"><strong>Model &amp; Cost Breakdown</strong>Per-sprint tokens, turns, and USD cost split by Claude model (Opus / Sonnet / Haiku) and by token type (input / output / cache-read / cache-write).<br><br>The dollar figures are at Anthropic API <em>list price</em>. If you were on Claude Code Max ($100&ndash;200/mo flat), your actual money cost was the plan price &mdash; this view tells you the no-plan equivalent so you can size the value vs. flat-rate trade-off.<span class="tip-target">Watch: cache-read often dominates &mdash; large system prompts read on every turn</span></div></span></h2>
+<div class="stat-row" id="cost-stats"></div>
+<div class="card"><h3>Cost per Sprint by Model<span class="tip">?<div class="tip-box"><strong>Cost per Sprint by Model</strong><strong>How computed:</strong> stacked-bar of USD cost per sprint, each segment one model. Cost = input&times;$/M + cache_create&times;1.25&times;$/M + cache_read&times;0.1&times;$/M + output&times;output-$/M, per Anthropic pricing.<br><br><strong>How to read:</strong> Tall stacks = expensive sprints. If Opus dominates a small sprint, that's a routing opportunity (could Sonnet have handled this?).</div></span></h3><span class="chart-subtitle">Stacked USD cost per sprint, one color per model.</span><div class="chart-wide"><canvas id="cost-by-model"></canvas></div></div>
+<div class="card" style="margin-top:24px"><h3>Cost per Sprint by Token Type<span class="tip">?<div class="tip-box"><strong>Cost per Sprint by Token Type</strong><strong>How computed:</strong> sprint USD cost split into 4 components &mdash; input, output, cache-read, cache-write. Same dollars as the chart above, sliced a different way.<br><br><strong>How to read:</strong> If cache-read dominates, your large prompt (CLAUDE.md + tools + context) is being re-read on every turn. Compactable: prune unused tool definitions, split sessions earlier.<br><br>Output cost is the only one you can <em>control</em> through prompt design &mdash; the rest scale with prompt size and turn count.</div></span></h3><span class="chart-subtitle">Same dollars, sliced by token type instead of model.</span><div class="chart-wide"><canvas id="cost-by-type"></canvas></div></div>
+<div class="grid grid-2" style="margin-top:24px">
+  <div class="card"><h3>Tokens by Type<span class="tip">?<div class="tip-box"><strong>Tokens by Type</strong><strong>How computed:</strong> total token counts across all visible sprints, grouped by type.<br><br><strong>How to read:</strong> Output is what the model <em>produced</em>. Input is what you <em>sent new</em> (small, usually). Cache reads dominate volume on long-running agent workflows. Cache writes happen when the cache fills or refreshes.</div></span></h3><span class="chart-subtitle">Raw token volume by category, across all visible sprints.</span><div class="chart-container"><canvas id="tokens-by-type"></canvas></div></div>
+  <div class="card"><h3>Tokens per Sprint by Type<span class="tip">?<div class="tip-box"><strong>Tokens per Sprint by Type</strong><strong>How computed:</strong> stacked input + output + cache-read + cache-write tokens per sprint.<br><br><strong>How to read:</strong> Sprint-level token shape. Steady cache-read share = stable prompt size. Spikes in cache-write = prompt re-cached (e.g., file changes triggered cache invalidation).</div></span></h3><span class="chart-subtitle">Stacked token volume by type, per sprint.</span><div class="chart-container"><canvas id="tokens-per-sprint-type"></canvas></div></div>
+</div>
+<div class="grid grid-2" style="margin-top:24px">
+  <div class="card"><h3>Output Tokens by Model<span class="tip">?<div class="tip-box"><strong>Output Tokens by Model</strong><strong>How computed:</strong> total output tokens summed across all sprints per model.<br><br><strong>How to read:</strong> Where the model is doing actual generation work. Opus's heavy output share = high-reasoning workload.</div></span></h3><span class="chart-subtitle">Total output tokens, all sprints, per model.</span><div class="chart-container"><canvas id="tokens-by-model"></canvas></div></div>
+  <div class="card"><h3>Model Mix (turns)<span class="tip">?<div class="tip-box"><strong>Model Mix</strong><strong>How computed:</strong> share of assistant turns by model across the full visible window.<br><br><strong>How to read:</strong> Mostly Opus = no routing in place. Mix of Opus + Sonnet + Haiku = active routing per task complexity.</div></span></h3><span class="chart-subtitle">Share of total assistant turns by model.</span><div class="chart-container"><canvas id="model-mix"></canvas></div></div>
+</div>
+<div class="card" style="margin-top:24px">
+  <h3>Model &amp; Token Cost Summary<span class="tip">?<div class="tip-box"><strong>Model &amp; Token Cost Summary</strong>Per-model rollup across all visible sprints with full token breakdown and cost. List prices: Opus $15/$75, Sonnet $3/$15, Haiku $1/$5 (input/output per M). Cache-write 1.25&times; input, cache-read 0.1&times; input.</div></span></h3>
+  <span class="chart-subtitle">Per-model totals with token breakdown across all visible sprints.</span>
+  <table><thead><tr>
+    <th>Model</th><th class="num">Sprints</th><th class="num">Turns</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache Read</th><th class="num">Cache Write</th><th class="num">Cost (USD)</th>
+  </tr></thead><tbody id="model-cost-table"></tbody></table>
+</div>
+<!-- /MODEL BREAKDOWN (injected by inject_model_breakdown.py) -->
+
+<div class="methodology-footer" id="methodology">
+  <h2>Methodology &amp; Data Lineage</h2>
+  <p>Schema reference: <code>.claude/docs/metrics-schema.md</code>. Validator: <code>.claude/schemas/metrics.schema.json</code>. Source: forward-looking emission from <code>.claude/scripts/token-tracking.sh</code> (per-bead per-phase records via <code>start</code>/<code>stop</code> at <code>/leroy</code> Step 3e + <code>/wrapup</code> Task 3c flush). Post-hoc reconstruction also supported via <code>.claude/scripts/inject_model_breakdown.py</code> (model usage from transcripts) and project-side <code>reconstruct_metrics.py</code> scripts.</p>
+
+  <h3>Data sources</h3>
+  <p>
+    &bull; <strong>Bead catalog</strong> &mdash; <code>bd list --json</code> (open + closed beads with full bodies including Effort Forecast).<br>
+    &bull; <strong>Forward-looking emission</strong> &mdash; <code>token-tracking.sh</code> bookmarks transcript line offsets at <code>start --bead &lt;id&gt; --phase &lt;phase&gt;</code> and computes deltas at <code>stop</code>. Per-session, per-bead, per-phase records.<br>
+    &bull; <strong>Coordinate-phase</strong> &mdash; <code>token-tracking.sh --coordinate --beads &lt;id1,id2,&hellip;&gt;</code> captures multi-bead planning cost separately, with <code>allocation_method: equal_split</code>.<br>
+    &bull; <strong>Post-hoc model breakdown</strong> &mdash; <code>inject_model_breakdown.py</code> reads session transcripts, extracts model field per assistant turn, emits one <code>record_type: model_breakdown</code> record per session per model. Required for the per-model cost dashboards.<br>
+    &bull; <strong>Sprint definition</strong> &mdash; the <code>branch</code> field on each record (derived from <code>git rev-parse --abbrev-ref HEAD</code> at session start).
+  </p>
+
+  <h3>Phase boundaries</h3>
+  <p><strong>Live emission:</strong> each <code>start</code>/<code>stop</code> boundary is explicit &mdash; the user/agent transitions phases via <code>stop --bead &lt;id&gt;</code> then <code>start --bead &lt;id&gt; --phase &lt;next&gt;</code>. Phase enum: <code>plan / discover / implement / test / fix</code> (5 work phases) plus <code>coordinate</code> for multi-bead planning.<br>
+  <strong>Post-hoc reconstruction</strong> (project-side scripts only): tool-call pattern classification &mdash; Read/Grep&nbsp;=&nbsp;plan, Edit/Write&nbsp;=&nbsp;implement, Bash(pytest|playwright|tsc|&hellip;)&nbsp;=&nbsp;test, Edit-after-fail&nbsp;=&nbsp;fix. ~10&ndash;20% boundary noise. LLM-judge refinement optional.</p>
+
+  <h3>Origin classification</h3>
+  <p>Each (session, bead) row gets an origin from handoff.yaml: <code>committed</code> if in the sprint's <em>completed/in_progress/next_steps</em>; <code>discovered</code> if in <em>discovered</em>; <code>carryover</code> if it was in_progress in the prior sprint; <code>added</code> otherwise (with explanatory note).</p>
+
+  <h3>Time bucketing</h3>
+  <p>Session-time records (<code>record_type: session_time</code>) use <strong>project-adaptive percentile thresholds</strong> for gap classification (default P75 / P93 / P97.7 cuts). Computed from the project's own gap distribution &mdash; tighter than uniform defaults because agentic-dev sessions have rapid back-to-back exchanges. Override thresholds in your wrapup workflow if your project pattern differs.</p>
+
+  <h3>Coverage caveats</h3>
+  <p>
+    &bull; Sessions that never invoke <code>bd update -s in_progress</code> via <code>/leroy</code> Step 3e produce no per-bead records &mdash; ad-hoc / exploratory work is invisible to this dashboard.<br>
+    &bull; Beads updated outside the <code>/leroy</code> claim flow (direct <code>bd update</code> / <code>bd close</code>) won't have effort records. <code>/wrapup</code> Task 3c surfaces these as warnings (orphaned closures) so you can decide whether to backfill.<br>
+    &bull; <code>forecast_*</code> values come from parsing the <em>Effort Forecast</em> section of each bead's body (per the <code>work-item-templates.md</code> contract: 5-phase breakdown &mdash; plan/discover/implement/test/fix &mdash; plus Total + Confidence). Set on each phase's first <em>start</em> to avoid multi-session double-counting on resume.<br>
+    &bull; Sprint dates use the latest <em>stopped</em> timestamp per branch. Multiple branches can end on the same day &mdash; not duplicates.
+  </p>
+
+  <h3>Vocabulary</h3>
+  <p>
+    &bull; <strong>bead</strong> = one work item / task in the <code>bd</code> tracker<br>
+    &bull; <strong>turn</strong> = one assistant message in the conversation (1 turn &approx; 1 round-trip)<br>
+    &bull; <strong>token</strong> = ~3&ndash;4 characters of model input/output<br>
+    &bull; <strong>sprint</strong> = one PR branch worth of work (typically 1&ndash;N sessions per sprint)<br>
+    &bull; <strong>phase</strong> = work-shape label on each record. Five work phases (<em>plan / discover / implement / test / fix</em>) plus <em>coordinate</em> for multi-bead planning.<br>
+    &bull; <strong>flow efficiency</strong> = % of session wall-clock during which the model was generating, vs waiting for human input<br>
+    &bull; <strong>Cynefin domain</strong> = complexity classification: <em>clear</em> (repeatable), <em>complicated</em> (expert-required), <em>complex</em> (experimental), <em>chaotic</em> (no causal model)
+  </p>
+
+  <p style="margin-top:20px;color:var(--muted);font-size:11px">
+    Dashboard template: <code>.claude/scripts/velocity.html</code> &middot; Generated by <code>.claude/scripts/velocity-report.py</code> when data is pre-embedded
+  </p>
+</div>
+
+<script>
+// ═══ GLOBALS ═══
+let ALL_DATA = [];
+let SPRINTS = [];
+let charts = {};
+const gc = '#21262d';
+const PHASE_COLORS = {coordinate:'#bc8cff',plan:'#58a6ff',discover:'#d29922',implement:'#3fb950',test:'#39d2c0',fix:'#f85149'};
+const TYPE_COLORS = {feature:'#58a6ff',bug:'#f85149',chore:'#3fb950',decision:'#d29922',task:'#8b949e'};
+const SIZE_COLORS = {small:'#3fb950',medium:'#d29922',large:'#f85149'};
+const CYNEFIN_COLORS = {clear:'#3fb950',complicated:'#58a6ff',complex:'#d29922',chaotic:'#f85149',disorder:'#8b949e'};
+const LAYER_COLORS = {frontend:'#58a6ff',backend:'#3fb950',data:'#d29922',infra:'#bc8cff',workflow:'#39d2c0'};
+
+Chart.defaults.color = '#8b949e';
+Chart.defaults.borderColor = '#30363d';
+Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif";
+Chart.defaults.font.size = 12;
+
+// ═══ FILE LOADER ═══
+// Embedded data — generated by velocity-report.py
+ALL_DATA = [];  // populated by velocity-report.py OR loaded via file picker above
+
+// ═══ BUILD SPRINT SUMMARIES ═══
+// Helper: treat undefined record_type as bead_effort (backward-compat with pre-discriminator data)
+const isBeadEffort = r => !r.record_type || r.record_type === 'bead_effort';
+
+function buildSprints() {
+  const bySession = {};
+  ALL_DATA.filter(isBeadEffort).forEach(r => {
+    if (!bySession[r.session_id]) bySession[r.session_id] = [];
+    bySession[r.session_id].push(r);
+  });
+  SPRINTS = Object.entries(bySession).map(([sid, recs]) => {
+    const dates = recs.map(r => r.stopped || r.timestamp || '').filter(Boolean).sort();
+    const date = dates.length ? dates[dates.length-1].split('T')[0] : 'unknown';
+    const beadIds = [...new Set(recs.map(r => r.bead_id))];
+    const committed = [...new Set(recs.filter(r => r.origin === 'committed').map(r => r.bead_id))];
+    const discovered = [...new Set(recs.filter(r => r.origin === 'discovered').map(r => r.bead_id))];
+    const bugs = [...new Set(recs.filter(r => r.issue_type === 'bug').map(r => r.bead_id))].length;
+    const features = [...new Set(recs.filter(r => r.issue_type === 'feature').map(r => r.bead_id))].length;
+    const chores = [...new Set(recs.filter(r => r.issue_type === 'chore').map(r => r.bead_id))].length;
+    const totalTurns = recs.reduce((a, r) => a + (r.turns || 0), 0);
+    const totalOutput = recs.reduce((a, r) => a + (r.actual_output_tokens || 0), 0);
+    const implTurns = recs.filter(r => r.phase === 'implement').reduce((a, r) => a + (r.turns || 0), 0);
+    const fixTurns = recs.filter(r => r.phase === 'fix').reduce((a, r) => a + (r.turns || 0), 0);
+    const planTurns = recs.filter(r => r.phase === 'plan').reduce((a, r) => a + (r.turns || 0), 0);
+    const coordTurns = recs.filter(r => r.phase === 'coordinate').reduce((a, r) => a + (r.turns || 0), 0);
+    const forecastTurns = recs.filter(r => r.origin === 'committed' && r.phase === 'implement' && r.forecast_turns).reduce((a, r) => a + r.forecast_turns, 0);
+    const committedTurns = recs.filter(r => r.origin === 'committed').reduce((a, r) => a + (r.turns || 0), 0);
+    const discoveredTurns = recs.filter(r => r.origin === 'discovered').reduce((a, r) => a + (r.turns || 0), 0);
+    return {
+      sid, date, beads: beadIds.length, committed: committed.length, discovered: discovered.length,
+      bugs, features, chores, totalTurns, totalOutput, implTurns, fixTurns, planTurns, coordTurns,
+      forecastTurns, committedTurns, discoveredTurns, recs
+    };
+  }).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ═══ SLIDER ═══
+function initSlider() {
+  const slider = document.getElementById('slider-range');
+  slider.min = 1;
+  slider.max = SPRINTS.length;
+  slider.value = SPRINTS.length;
+  document.getElementById('slider-max').textContent = 'All (' + SPRINTS.length + ')';
+  slider.oninput = () => render();
+}
+
+function getFilteredSprints() {
+  const n = parseInt(document.getElementById('slider-range').value);
+  return SPRINTS.slice(SPRINTS.length - n);
+}
+
+function getFilteredData() {
+  const sids = new Set(getFilteredSprints().map(s => s.sid));
+  return ALL_DATA.filter(r => isBeadEffort(r) && sids.has(r.session_id));
+}
+
+// ═══ DESTROY + RECREATE CHARTS ═══
+function destroyCharts() {
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+}
+
+function makeChart(id, config) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  const c = new Chart(el, config);
+  charts[id] = c;
+  return c;
+}
+
+// ═══ RENDER ALL ═══
+function render() {
+  destroyCharts();
+  const sp = getFilteredSprints();
+  const data = getFilteredData();
+  const labels = sp.map(s => s.date);
+  const n = sp.length;
+
+  // Slider label
+  if (n === SPRINTS.length) {
+    document.getElementById('slider-label').textContent = `All ${n} sprints`;
+  } else if (n === 1) {
+    document.getElementById('slider-label').textContent = `Last sprint: ${sp[0].date} (${sp[0].sid.slice(0,8)})`;
+  } else {
+    document.getElementById('slider-label').textContent = `Last ${n} sprints: ${sp[0].date} \u2014 ${sp[n-1].date}`;
+  }
+
+  // ── TOP STATS ──
+  const totalBeads = [...new Set(data.map(r => r.bead_id))].length;
+  const totalTurns = data.reduce((a, r) => a + (r.turns || 0), 0);
+  const totalOutput = data.reduce((a, r) => a + (r.actual_output_tokens || 0), 0);
+  const committedBeads = [...new Set(data.filter(r => r.origin === 'committed').map(r => r.bead_id))].length;
+  const discoveredBeads = [...new Set(data.filter(r => r.origin === 'discovered').map(r => r.bead_id))].length;
+  const fixTurns = data.filter(r => r.phase === 'fix').reduce((a, r) => a + (r.turns || 0), 0);
+  const fixPct = totalTurns > 0 ? Math.round(fixTurns / totalTurns * 100) : 0;
+  const escapes = [...new Set(data.filter(r => r.discovered_from).map(r => r.bead_id))].length;
+
+  document.getElementById('top-stats').innerHTML = `
+    <div class="stat"><div class="stat-value">${totalBeads}</div><div class="stat-label">Beads</div><div class="stat-sub">${n} sprint${n>1?'s':''}</div></div>
+    <div class="stat"><div class="stat-value" style="color:var(--green)">${totalBeads>0?Math.round(committedBeads/totalBeads*100):0}%</div><div class="stat-label">Committed</div><div class="stat-sub">${committedBeads} planned</div></div>
+    <div class="stat"><div class="stat-value" style="color:var(--purple)">${totalBeads>0?Math.round(discoveredBeads/totalBeads*100):0}%</div><div class="stat-label">Discovered</div><div class="stat-sub">${discoveredBeads} mid-sprint</div></div>
+    <div class="stat"><div class="stat-value">${totalTurns.toLocaleString()}</div><div class="stat-label">Total Turns</div><div class="stat-sub">${(totalOutput/1000).toFixed(0)}k tokens</div></div>
+    <div class="stat"><div class="stat-value" style="color:var(--red)">${fixPct}%</div><div class="stat-label">Fix Rate</div><div class="stat-sub">${fixTurns} turns rework</div></div>
+    <div class="stat"><div class="stat-value" style="color:${escapes>10?'var(--red)':'var(--amber)'}">${escapes}</div><div class="stat-label">Escaped Bugs</div><div class="stat-sub">from discovered_from</div></div>
+  `;
+
+  // ── 1. SPRINT TABLE ──
+  const tb = document.getElementById('sprint-table');
+  tb.innerHTML = '';
+  sp.forEach(s => {
+    const hit = s.committed > 0 ? Math.round((s.beads - s.discovered) / s.committed * 100) : 0;
+    const creep = s.committed > 0 ? Math.round(s.discovered / s.committed * 100) : 0;
+    const implPct = s.totalTurns > 0 ? Math.round(s.implTurns / s.totalTurns * 100) : 0;
+    const tokTurn = s.totalTurns > 0 ? Math.round(s.totalOutput / s.totalTurns) : 0;
+    tb.innerHTML += `<tr>
+      <td><code>${s.sid.slice(0,8)}</code></td><td>${s.date}</td>
+      <td class="num">${s.committed}</td><td class="num">${s.beads - s.discovered}</td><td class="num">0</td><td class="num">${s.discovered}</td>
+      <td class="num" style="color:var(${hit>=90?'--green':hit>=70?'--amber':'--red'})">${s.committed>0?hit+'%':'\u2014'}</td>
+      <td class="num" style="color:var(${creep>50?'--red':creep>25?'--amber':'--green'})">${s.committed>0?creep+'%':'\u2014'}</td>
+      <td class="num">${s.totalTurns}</td><td class="num">${implPct}%</td><td class="num">${tokTurn}</td>
+    </tr>`;
+  });
+
+  // ── 2. PROJECTED vs ACTUAL ──
+  makeChart('proj-actual', {type:'bar',data:{labels,datasets:[
+    {label:'Forecasted',data:sp.map(s=>s.forecastTurns),backgroundColor:'#58a6ff',borderRadius:4},
+    {label:'Effort overage',data:sp.map(s=>Math.max(0,s.committedTurns-s.forecastTurns)),backgroundColor:'#d29922',borderRadius:4},
+    {label:'Discovered',data:sp.map(s=>s.discoveredTurns),backgroundColor:'rgba(188,140,255,.6)',borderRadius:4},
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+  scales:{y:{stacked:true,beginAtZero:true,grid:{color:gc}},x:{stacked:true,grid:{display:false}}}}});
+
+  // ── 2b. BEADS BY TYPE ──
+  makeChart('beads-type', {type:'bar',data:{labels,datasets:[
+    {label:'Features',data:sp.map(s=>s.features),backgroundColor:'#58a6ff',borderRadius:4},
+    {label:'Bugs',data:sp.map(s=>s.bugs),backgroundColor:'#f85149',borderRadius:4},
+    {label:'Chores',data:sp.map(s=>s.chores),backgroundColor:'#3fb950',borderRadius:4},
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+  scales:{y:{stacked:true,beginAtZero:true,grid:{color:gc}},x:{stacked:true,grid:{display:false}}}}});
+
+  // ── 2c. COMMITTED vs DISCOVERED ──
+  makeChart('origin-stack', {type:'bar',data:{labels,datasets:[
+    {label:'Committed',data:sp.map(s=>s.committed),backgroundColor:'#58a6ff',borderRadius:4},
+    {label:'Discovered',data:sp.map(s=>s.discovered),backgroundColor:'#bc8cff',borderRadius:4},
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+  scales:{y:{stacked:true,beginAtZero:true,grid:{color:gc}},x:{stacked:true,grid:{display:false}}}}});
+
+  // ── 3. SCOPE CREEP ──
+  makeChart('creep-line', {type:'line',data:{labels,datasets:[
+    {label:'Creep %',data:sp.map(s=>s.committed>0?Math.round(s.discovered/s.committed*100):0),borderColor:'#bc8cff',backgroundColor:'rgba(188,140,255,.1)',fill:true,tension:.3,pointRadius:5,pointBackgroundColor:'#bc8cff'},
+    {label:'Target (25%)',data:sp.map(()=>25),borderColor:'#3fb950',borderDash:[5,5],pointRadius:0}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+  scales:{y:{beginAtZero:true,grid:{color:gc},ticks:{callback:v=>v+'%'}},x:{grid:{display:false}}}}});
+
+  // ── 3b. PREDICTABILITY ──
+  const pMean = sp.length > 0 ? sp.reduce((a,s)=>a+s.beads,0)/sp.length : 0;
+  const pSd = sp.length > 1 ? Math.sqrt(sp.reduce((a,s)=>a+Math.pow(s.beads-pMean,2),0)/sp.length) : 0;
+  makeChart('predict-chart', {type:'bar',data:{labels,datasets:[
+    {label:'Beads/Sprint',data:sp.map(s=>s.beads),backgroundColor:sp.map(s=>Math.abs(s.beads-pMean)>pSd?'#f85149':Math.abs(s.beads-pMean)>pSd/2?'#d29922':'#3fb950'),borderRadius:4},
+    {label:'Mean ('+pMean.toFixed(1)+')',data:sp.map(()=>pMean),type:'line',borderColor:'#58a6ff',borderDash:[5,5],pointRadius:0,borderWidth:2,fill:false},
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:12,font:{size:10}}}},
+  scales:{y:{beginAtZero:true,grid:{color:gc}},x:{grid:{display:false}}}}});
+
+  // ── 3c. WORK MIX ──
+  const typeCounts = {};
+  data.forEach(r => { const t = r.issue_type; typeCounts[t] = (typeCounts[t]||0)+1; });
+  makeChart('mix-donut', {type:'doughnut',data:{
+    labels:Object.keys(typeCounts).map(t=>t+' ('+typeCounts[t]+')'),
+    datasets:[{data:Object.values(typeCounts),backgroundColor:Object.keys(typeCounts).map(t=>TYPE_COLORS[t]||'#8b949e'),borderWidth:0}]
+  },options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}}}});
+
+  // ── 4. BUG TRENDS ──
+  makeChart('bugs-bar', {type:'bar',data:{labels,datasets:[
+    {label:'Bugs',data:sp.map(s=>s.bugs),backgroundColor:'#f85149',borderRadius:4}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:true,grid:{color:gc}},x:{grid:{display:false}}}}});
+
+  makeChart('bug-ratio', {type:'line',data:{labels,datasets:[{
+    label:'Bug %',data:sp.map(s=>s.beads>0?Math.round(s.bugs/s.beads*100):0),
+    borderColor:'#f85149',backgroundColor:'rgba(248,81,73,.1)',fill:true,tension:.3,pointRadius:5,pointBackgroundColor:'#f85149'
+  }]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:true,max:100,grid:{color:gc},ticks:{callback:v=>v+'%'}},x:{grid:{display:false}}}}});
+
+  // ── 5. ESCAPE RATE ──
+  const escapeMap = {};
+  data.filter(r => r.discovered_from).forEach(r => {
+    const src = r.discovered_from.replace('mission-control-','');
+    escapeMap[src] = (escapeMap[src]||0) + 1;
+  });
+  const escapeSorted = Object.entries(escapeMap).sort((a,b)=>b[1]-a[1]);
+  makeChart('escape-bar', {type:'bar',data:{
+    labels:escapeSorted.map(e=>e[0]),
+    datasets:[{label:'Escaped Bugs',data:escapeSorted.map(e=>e[1]),
+      backgroundColor:escapeSorted.map(e=>e[1]>=10?'#f85149':e[1]>=3?'#d29922':'#58a6ff'),borderRadius:4}]
+  },options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},
+  scales:{x:{beginAtZero:true,grid:{color:gc}},y:{grid:{display:false}}}}});
+
+  const totalEscapes = escapeSorted.reduce((a,e)=>a+e[1],0);
+  const uniqueSources = escapeSorted.length;
+  document.getElementById('escape-summary').innerHTML = `<table>
+    <tr><td>Total escaped bugs</td><td class="num">${totalEscapes}</td></tr>
+    <tr><td>Unique source beads</td><td class="num">${uniqueSources}</td></tr>
+    <tr><td>Total beads</td><td class="num">${totalBeads}</td></tr>
+    <tr><td>Escape rate</td><td class="num" style="color:var(--red)">${totalBeads>0?Math.round(uniqueSources/totalBeads*100):0}%</td></tr>
+  </table>`;
+
+  // ── 6. TOKENS ──
+  makeChart('tokens-bar', {type:'bar',data:{labels,datasets:[{
+    label:'Output Tokens',data:sp.map(s=>s.totalOutput),backgroundColor:'#39d2c0',borderRadius:4
+  }]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:true,grid:{color:gc},ticks:{callback:v=>(v/1000).toFixed(0)+'k'}},x:{grid:{display:false}}}}});
+
+  makeChart('density-line', {type:'line',data:{labels,datasets:[{
+    label:'Tokens/Turn',data:sp.map(s=>s.totalTurns>0?Math.round(s.totalOutput/s.totalTurns):0),
+    borderColor:'#39d2c0',backgroundColor:'rgba(57,210,192,.1)',fill:true,tension:.3,pointRadius:5,pointBackgroundColor:'#39d2c0'
+  }]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:false,grid:{color:gc}},x:{grid:{display:false}}}}});
+
+  // ── 7. VELOCITY HEATMAP ──
+  const types=['bug','chore','feature'],sizes=['small','medium','large'];
+  const velMap = {};
+  data.filter(r=>r.phase==='implement').forEach(r=>{
+    const k=r.issue_type+':'+r.issue_size;
+    if(!velMap[k])velMap[k]={turns:[],tokens:[]};
+    velMap[k].turns.push(r.turns);velMap[k].tokens.push(r.actual_output_tokens);
+  });
+  makeChart('velocity-grouped', {type:'bar',data:{labels:types,datasets:sizes.map(sz=>({
+    label:sz,data:types.map(t=>{const m=velMap[t+':'+sz];return m?Math.round(m.turns.reduce((a,v)=>a+v,0)/m.turns.length):0;}),
+    backgroundColor:SIZE_COLORS[sz],borderRadius:4
+  }))},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+  scales:{y:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Avg Turns',color:'#8b949e'}},x:{grid:{display:false}}}}});
+
+  makeChart('turns-line', {type:'line',data:{labels,datasets:[{
+    label:'Avg Turns/Bead',data:sp.map(s=>s.beads>0?+(s.totalTurns/s.beads).toFixed(1):0),
+    borderColor:'#58a6ff',backgroundColor:'rgba(88,166,255,.1)',fill:true,tension:.3,pointRadius:5,pointBackgroundColor:'#58a6ff'
+  }]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:true,grid:{color:gc}},x:{grid:{display:false}}}}});
+
+  // ── 8. VELOCITY TABLE ──
+  const vtb = document.getElementById('vel-table');
+  vtb.innerHTML = '';
+  const velArr = Object.entries(velMap).map(([k,v])=>{
+    const [type,size]=k.split(':');
+    return {type,size,turns:Math.round(v.turns.reduce((a,x)=>a+x,0)/v.turns.length),
+            tokens:Math.round(v.tokens.reduce((a,x)=>a+x,0)/v.tokens.length),n:v.turns.length};
+  }).filter(v=>v.size&&v.size!=='null').sort((a,b)=>a.turns-b.turns);
+  const maxT = Math.max(...velArr.map(v=>v.turns),1);
+  velArr.forEach(v=>{
+    const sc=v.size==='small'?'badge-s':v.size==='medium'?'badge-m':'badge-l';
+    vtb.innerHTML+=`<tr><td><span class="badge badge-${v.type}">${v.type}</span></td><td><span class="badge ${sc}">${v.size}</span></td>
+      <td class="num">${v.turns}</td><td class="num">${(v.tokens/1000).toFixed(1)}k</td><td class="num">${v.n}</td>
+      <td><div class="progress-bar"><div class="progress-fill" style="width:${Math.round(v.turns/maxT*100)}%;background:${SIZE_COLORS[v.size]||'#8b949e'}"></div></div></td></tr>`;
+  });
+
+  // ── 9. PHASE DISTRIBUTION ──
+  const phaseTotals = {};
+  data.forEach(r => { phaseTotals[r.phase] = (phaseTotals[r.phase]||0) + (r.turns||0); });
+  const phaseTotal = Object.values(phaseTotals).reduce((a,v)=>a+v,0);
+  const bar = document.getElementById('phase-bar');
+  const legend = document.getElementById('phase-legend');
+  bar.innerHTML = ''; legend.innerHTML = '';
+  ['coordinate','plan','discover','implement','test','fix'].forEach(p => {
+    const t = phaseTotals[p]||0;
+    const pct = phaseTotal>0?(t/phaseTotal*100):0;
+    if(pct>0) bar.innerHTML += `<div style="width:${pct}%;background:${PHASE_COLORS[p]}" title="${p}: ${pct.toFixed(1)}% (${t} turns)">${pct>4?p+' '+pct.toFixed(0)+'%':''}</div>`;
+    legend.innerHTML += `<span><span style="color:${PHASE_COLORS[p]}">\u25A0</span> ${p} (${t})</span>`;
+  });
+
+  // ── 10. LEAD TIME ──
+  const leadBuckets = [0,0,0,0];
+  const seen = new Set();
+  data.filter(r=>r.bead_created_at&&r.stopped&&r.bead_closed).forEach(r=>{
+    if(seen.has(r.bead_id))return; seen.add(r.bead_id);
+    const created=new Date(r.bead_created_at), closed=new Date(r.stopped.split('T')[0]);
+    const days=Math.floor((closed-created)/86400000);
+    if(days<=0)leadBuckets[0]++;else if(days<=1)leadBuckets[1]++;else if(days<=3)leadBuckets[2]++;else leadBuckets[3]++;
+  });
+  makeChart('lead-bar', {type:'bar',data:{labels:['Same day','1 day','2-3 days','4+ days'],
+    datasets:[{data:leadBuckets,backgroundColor:['#3fb950','#58a6ff','#d29922','#f85149'],borderRadius:4}]
+  },options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},
+  scales:{x:{beginAtZero:true,grid:{color:gc}},y:{grid:{display:false}}}}});
+
+  const cycleBySz = {};
+  // Group by bead, find first_claimed and last stopped per bead
+  const beadTimes = {};
+  data.filter(r=>r.first_claimed_at&&r.issue_size).forEach(r=>{
+    if(!beadTimes[r.bead_id]) beadTimes[r.bead_id] = {size:r.issue_size, claimed:r.first_claimed_at, stopped:null, closed:false};
+    if(r.stopped && (!beadTimes[r.bead_id].stopped || r.stopped > beadTimes[r.bead_id].stopped)) beadTimes[r.bead_id].stopped = r.stopped;
+    if(r.bead_closed) beadTimes[r.bead_id].closed = true;
+  });
+  Object.values(beadTimes).filter(b=>b.closed&&b.stopped).forEach(b=>{
+    try{
+      const claimed=new Date(b.claimed.split('.')[0]+'Z'),stopped=new Date(b.stopped.split('.')[0]+'Z');
+      const mins=(stopped-claimed)/60000;
+      if(mins>=0){if(!cycleBySz[b.size])cycleBySz[b.size]=[];cycleBySz[b.size].push(mins);}
+    }catch(e){}
+  });
+  const cycleLabels=[],cycleData=[],cycleCols=[];
+  ['small','medium','large'].forEach(sz=>{
+    if(cycleBySz[sz]){
+      const avg=cycleBySz[sz].reduce((a,v)=>a+v,0)/cycleBySz[sz].length;
+      cycleLabels.push(sz.charAt(0).toUpperCase()+sz.slice(1)+' (N='+cycleBySz[sz].length+')');
+      cycleData.push(Math.round(avg*10)/10);
+      cycleCols.push(SIZE_COLORS[sz]);
+    }
+  });
+  makeChart('cycle-bar', {type:'bar',data:{labels:cycleLabels,datasets:[{data:cycleData,backgroundColor:cycleCols,borderRadius:4}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Minutes',color:'#8b949e'}},x:{grid:{display:false}}}}});
+
+  // ── 11. FORECAST ACCURACY ──
+  const accBeads = [];
+  const seenAcc = new Set();
+  data.filter(r=>r.forecast_turns&&r.phase==='implement'&&r.turns>0).forEach(r=>{
+    if(seenAcc.has(r.bead_id))return;seenAcc.add(r.bead_id);
+    const acc=Math.floor(Math.min(r.forecast_turns,r.turns)/Math.max(r.forecast_turns,r.turns)*100);
+    accBeads.push({id:r.bead_id.replace('mission-control-',''),f:r.forecast_turns,a:r.turns,acc});
+  });
+  const avgAcc = accBeads.length>0?Math.round(accBeads.reduce((a,b)=>a+b.acc,0)/accBeads.length):0;
+  const over80 = accBeads.filter(b=>b.acc>=80).length;
+  const under50 = accBeads.filter(b=>b.acc<50).length;
+
+  document.getElementById('acc-stats').innerHTML = `
+    <div class="stat"><div class="stat-value" style="color:var(${avgAcc>=80?'--green':avgAcc>=60?'--amber':'--red'})">${avgAcc}%</div><div class="stat-label">Avg Accuracy</div><div class="stat-sub">${accBeads.length} beads</div></div>
+    <div class="stat"><div class="stat-value" style="color:var(--green)">${over80}</div><div class="stat-label">&ge;80% Accurate</div><div class="stat-sub">${accBeads.length>0?Math.round(over80/accBeads.length*100):0}%</div></div>
+    <div class="stat"><div class="stat-value" style="color:var(--red)">${under50}</div><div class="stat-label">&lt;50% Accurate</div><div class="stat-sub">${accBeads.length>0?Math.round(under50/accBeads.length*100):0}%</div></div>
+  `;
+
+  const dist=[0,0,0,0,0];
+  accBeads.forEach(b=>{if(b.acc>=90)dist[4]++;else if(b.acc>=70)dist[3]++;else if(b.acc>=50)dist[2]++;else if(b.acc>=25)dist[1]++;else dist[0]++;});
+  makeChart('acc-dist', {type:'bar',data:{labels:['0-24%','25-49%','50-69%','70-89%','90-100%'],
+    datasets:[{data:dist,backgroundColor:['#f85149','#f85149','#d29922','#3fb950','#3fb950'],borderRadius:4}]
+  },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+  scales:{y:{beginAtZero:true,grid:{color:gc}},x:{grid:{display:false},title:{display:true,text:'Accuracy \u2192',color:'#8b949e'}}}}});
+
+  makeChart('acc-scatter', {type:'scatter',data:{datasets:[
+    {label:'Beads',data:accBeads.map(b=>({x:b.f,y:b.a})),backgroundColor:'rgba(88,166,255,.6)',pointRadius:5,pointHoverRadius:8},
+    {label:'Perfect (y=x)',data:[{x:0,y:0},{x:60,y:60}],type:'line',borderColor:'#3fb950',borderDash:[5,5],pointRadius:0,borderWidth:1}
+  ]},options:{responsive:true,maintainAspectRatio:false,
+  plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}},tooltip:{callbacks:{label:function(ctx){
+    if(ctx.datasetIndex!==0)return '';const b=accBeads[ctx.dataIndex];
+    return b.id+': forecast='+b.f+' actual='+b.a+' ('+b.acc+'%)';}}}},
+  scales:{x:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Forecast',color:'#8b949e'}},
+          y:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Actual',color:'#8b949e'}}}}});
+
+  // ── 12. HUMAN-AI FLOW ──
+  const timeRecs = ALL_DATA.filter(r => r.record_type === 'session_time');
+  // Match time records to filtered sprints
+  const filteredSids = new Set(sp.map(s => s.sid));
+  const flowData = timeRecs.filter(r => filteredSids.has(r.session_id))
+    .sort((a, b) => {
+      const sa = sp.find(s => s.sid === a.session_id);
+      const sb = sp.find(s => s.sid === b.session_id);
+      return (sa?.date || '').localeCompare(sb?.date || '');
+    });
+
+  if (flowData.length > 0) {
+    const avgFlow = Math.round(flowData.reduce((a, r) => a + r.flow_efficiency_pct, 0) / flowData.length);
+    const totalAI = flowData.reduce((a, r) => a + r.ai_active_seconds, 0);
+    const totalHuman = flowData.reduce((a, r) => a + r.human_review_seconds, 0);
+    const ratio = totalHuman > 0 ? (totalHuman / totalAI).toFixed(1) : '0';
+    const highDrift = flowData.filter(r => r.drift_risk === 'HIGH').length;
+
+    document.getElementById('flow-stats').innerHTML = `
+      <div class="stat"><div class="stat-value" style="color:var(${avgFlow>=85?'--green':avgFlow>=50?'--accent':'--amber'})">${avgFlow}%</div><div class="stat-label">Avg Flow</div><div class="stat-sub">${flowData.length} sprints</div></div>
+      <div class="stat"><div class="stat-value">${(totalAI/3600).toFixed(1)}h</div><div class="stat-label">AI Active</div><div class="stat-sub">total</div></div>
+      <div class="stat"><div class="stat-value">${(totalHuman/3600).toFixed(1)}h</div><div class="stat-label">Human Active</div><div class="stat-sub">1:${ratio} ratio</div></div>
+      <div class="stat"><div class="stat-value" style="color:var(${highDrift>flowData.length/2?'--red':'--green'})">${highDrift}/${flowData.length}</div><div class="stat-label">High Drift</div><div class="stat-sub">sprints with >50% away</div></div>
+    `;
+
+    const flowLabels = flowData.map(r => {
+      const s = sp.find(s => s.sid === r.session_id);
+      return s ? s.date : r.session_id.slice(0, 8);
+    });
+
+    // Flow efficiency trend with ideal line
+    makeChart('flow-trend', {type:'line', data:{labels:flowLabels, datasets:[
+      {label:'Flow %', data:flowData.map(r=>r.flow_efficiency_pct), borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,.1)',
+       fill:true, tension:.3, pointRadius:6, pointBackgroundColor:flowData.map(r=>r.flow_efficiency_pct>=85?'#3fb950':r.flow_efficiency_pct>=50?'#58a6ff':'#f85149')},
+      {label:'Ideal (85%)', data:flowData.map(()=>85), borderColor:'#3fb950', borderDash:[5,5], pointRadius:0, borderWidth:2},
+      {label:'Warning (50%)', data:flowData.map(()=>50), borderColor:'#f85149', borderDash:[3,3], pointRadius:0, borderWidth:1},
+    ]}, options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{boxWidth:12, padding:16}}},
+      scales:{y:{min:0, max:100, grid:{color:gc}, ticks:{callback:v=>v+'%'}}, x:{grid:{display:false}}}}});
+
+    // Time composition stacked bar
+    makeChart('time-comp', {type:'bar', data:{labels:flowLabels, datasets:[
+      {label:'AI Active', data:flowData.map(r=>r.ai_active_seconds/60), backgroundColor:'#58a6ff', borderRadius:4},
+      {label:'Human Active', data:flowData.map(r=>r.human_review_seconds/60), backgroundColor:'#3fb950', borderRadius:4},
+      {label:'Think', data:flowData.map(r=>r.human_think_seconds/60), backgroundColor:'#d29922', borderRadius:4},
+      {label:'Idle', data:flowData.map(r=>r.human_idle_seconds/60), backgroundColor:'#8b949e', borderRadius:4},
+    ]}, options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{boxWidth:12, padding:12, font:{size:10}}},
+        tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+': '+ctx.raw.toFixed(1)+'m'}}}},
+      scales:{y:{stacked:true, beginAtZero:true, grid:{color:gc}, title:{display:true, text:'Minutes', color:'#8b949e'}},
+              x:{stacked:true, grid:{display:false}}}}});
+
+    // Flow table
+    const ftb = document.getElementById('flow-table');
+    ftb.innerHTML = '';
+    flowData.forEach(r => {
+      const s = sp.find(s => s.sid === r.session_id);
+      const date = s ? s.date : '?';
+      const driftCls = r.drift_risk === 'HIGH' ? 'red' : r.drift_risk === 'MEDIUM' ? 'amber' : 'green';
+      const flowCls = r.flow_efficiency_pct >= 85 ? 'green' : r.flow_efficiency_pct >= 50 ? 'accent' : 'red';
+      ftb.innerHTML += `<tr>
+        <td><code>${r.session_id.slice(0,8)}</code></td><td>${date}</td>
+        <td class="num">${(r.ai_active_seconds/60).toFixed(1)}m</td>
+        <td class="num">${(r.human_review_seconds/60).toFixed(1)}m</td>
+        <td class="num">${(r.human_think_seconds/60).toFixed(1)}m</td>
+        <td class="num">${(r.human_idle_seconds/60).toFixed(1)}m</td>
+        <td class="num">${(r.human_away_seconds/60).toFixed(0)}m</td>
+        <td class="num" style="color:var(--${flowCls})">${r.flow_efficiency_pct}%</td>
+        <td><span class="badge" style="background:rgba(${r.drift_risk==='HIGH'?'248,81,73':r.drift_risk==='MEDIUM'?'210,153,34':'63,185,80'},.15);color:var(--${driftCls})">${r.drift_risk}</span></td>
+      </tr>`;
+    });
+  } else {
+    document.getElementById('flow-stats').innerHTML = '<div class="stat"><div class="stat-value" style="color:var(--muted)">--</div><div class="stat-label">No time data</div><div class="stat-sub">Needs session_time records in metrics.jsonl</div></div>';
+  }
+
+  // ── 13. CYNEFIN DOMAIN ANALYSIS ──
+  const CYNEFIN_DOMAINS = ['clear','complicated','complex','chaotic'];
+  const cynefinMap = {};
+  data.forEach(r => {
+    const d = r.cynefin_domain || 'unclassified';
+    if(!cynefinMap[d]) cynefinMap[d] = {turns:[], forecasts:[], actuals:[], beads:new Set()};
+    cynefinMap[d].turns.push(r.turns||0);
+    cynefinMap[d].beads.add(r.bead_id);
+    if(r.forecast_turns && r.phase==='implement' && r.turns>0 && !cynefinMap[d]._accSeen) {
+      // Dedupe by bead for accuracy
+    }
+  });
+  // Rebuild accuracy per domain
+  const cynefinAcc = {};
+  const accSeen2 = new Set();
+  data.filter(r=>r.forecast_turns&&r.phase==='implement'&&r.turns>0).forEach(r=>{
+    if(accSeen2.has(r.bead_id))return; accSeen2.add(r.bead_id);
+    const d = r.cynefin_domain || 'unclassified';
+    if(!cynefinAcc[d]) cynefinAcc[d] = [];
+    cynefinAcc[d].push({f:r.forecast_turns, a:r.turns, acc:Math.floor(Math.min(r.forecast_turns,r.turns)/Math.max(r.forecast_turns,r.turns)*100)});
+  });
+
+  // Forecast accuracy by domain - grouped bar
+  const accDomains = CYNEFIN_DOMAINS.filter(d=>cynefinAcc[d]&&cynefinAcc[d].length>0);
+  if(accDomains.length>0) {
+    makeChart('cynefin-acc', {type:'bar',data:{
+      labels:accDomains.map(d=>d.charAt(0).toUpperCase()+d.slice(1)+' (N='+cynefinAcc[d].length+')'),
+      datasets:[
+        {label:'Avg Forecast',data:accDomains.map(d=>{const arr=cynefinAcc[d];return Math.round(arr.reduce((a,b)=>a+b.f,0)/arr.length);}),backgroundColor:'rgba(88,166,255,.4)',borderColor:'#58a6ff',borderWidth:2,borderRadius:4},
+        {label:'Avg Actual',data:accDomains.map(d=>{const arr=cynefinAcc[d];return Math.round(arr.reduce((a,b)=>a+b.a,0)/arr.length);}),backgroundColor:accDomains.map(d=>CYNEFIN_COLORS[d]),borderRadius:4}
+      ]
+    },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+    scales:{y:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Turns',color:'#8b949e'}},x:{grid:{display:false}}}}});
+  }
+
+  // Effort by domain per sprint - stacked bar
+  const domainSprints = {};
+  sp.forEach((s,i) => {
+    const sdata = data.filter(r=>r.session_id===s.sid);
+    CYNEFIN_DOMAINS.forEach(d => {
+      if(!domainSprints[d]) domainSprints[d] = [];
+      domainSprints[d][i] = sdata.filter(r=>(r.cynefin_domain||'unclassified')===d).reduce((a,r)=>a+(r.turns||0),0);
+    });
+  });
+  const effortDomains = CYNEFIN_DOMAINS.filter(d=>domainSprints[d]&&domainSprints[d].some(v=>v>0));
+  if(effortDomains.length>0) {
+    makeChart('cynefin-effort', {type:'bar',data:{labels,datasets:effortDomains.map(d=>({
+      label:d.charAt(0).toUpperCase()+d.slice(1),
+      data:domainSprints[d],
+      backgroundColor:CYNEFIN_COLORS[d],
+      borderRadius:4
+    }))},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:16}}},
+    scales:{y:{stacked:true,beginAtZero:true,grid:{color:gc},title:{display:true,text:'Turns',color:'#8b949e'}},x:{stacked:true,grid:{display:false}}}}});
+  }
+
+  // Domain velocity reference table
+  const ctb = document.getElementById('cynefin-table');
+  ctb.innerHTML = '';
+  CYNEFIN_DOMAINS.concat(['unclassified']).forEach(d => {
+    const m = cynefinMap[d];
+    if(!m || m.beads.size===0) return;
+    const avgTurns = Math.round(m.turns.reduce((a,v)=>a+v,0)/m.turns.length);
+    const acc = cynefinAcc[d];
+    const avgAccStr = acc && acc.length>0 ? Math.round(acc.reduce((a,b)=>a+b.acc,0)/acc.length)+'%' : '--';
+    const col = CYNEFIN_COLORS[d] || '#8b949e';
+    const maxTurns = Math.max(...Object.values(cynefinMap).map(v=>v.turns.reduce((a,x)=>a+x,0)/v.turns.length),1);
+    ctb.innerHTML += `<tr>
+      <td><span class="badge" style="background:${col}22;color:${col}">${d}</span></td>
+      <td class="num">${m.beads.size}</td>
+      <td class="num">${avgTurns}</td>
+      <td class="num">${avgAccStr}</td>
+      <td><div class="progress-bar"><div class="progress-fill" style="width:${Math.round(avgTurns/maxTurns*100)}%;background:${col}"></div></div></td>
+    </tr>`;
+  });
+
+  // ── 14. LAYER ANALYSIS ──
+  const ALL_LAYERS = ['frontend','backend','data','infra','workflow'];
+  const layerTurns = {};
+  const layerCombos = {};
+  data.forEach(r => {
+    const layers = r.layers || [];
+    if(layers.length === 0) return;
+    const comboKey = layers.slice().sort().join('+');
+    layerCombos[comboKey] = (layerCombos[comboKey]||0) + (r.turns||0);
+    layers.forEach(l => {
+      layerTurns[l] = (layerTurns[l]||0) + (r.turns||0);
+    });
+  });
+
+  // Effort by layer - horizontal bar
+  const activeLayers = ALL_LAYERS.filter(l => layerTurns[l] > 0);
+  if(activeLayers.length > 0) {
+    makeChart('layer-effort', {type:'bar',data:{
+      labels:activeLayers.map(l=>l.charAt(0).toUpperCase()+l.slice(1)),
+      datasets:[{data:activeLayers.map(l=>layerTurns[l]),backgroundColor:activeLayers.map(l=>LAYER_COLORS[l]),borderRadius:4}]
+    },options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},
+    scales:{x:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Turns',color:'#8b949e'}},y:{grid:{display:false}}}}});
+  }
+
+  // Layer combinations - horizontal bar with unique colors per combo
+  const comboEntries = Object.entries(layerCombos).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const COMBO_PALETTE = ['#58a6ff','#3fb950','#d29922','#bc8cff','#39d2c0','#f85149','#e6edf3','#8b949e'];
+  if(comboEntries.length > 0) {
+    makeChart('layer-combos', {type:'bar',data:{
+      labels:comboEntries.map(([k])=>k),
+      datasets:[{data:comboEntries.map(([,v])=>v),backgroundColor:comboEntries.map((_,i)=>COMBO_PALETTE[i % COMBO_PALETTE.length]),borderRadius:4}]
+    },options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},
+    scales:{x:{beginAtZero:true,grid:{color:gc},title:{display:true,text:'Turns',color:'#8b949e'}},y:{grid:{display:false}}}}});
+  }
+
+  // Footer
+  document.getElementById('footer').innerHTML = `Loaded ${ALL_DATA.length} segments, ${totalBeads} beads, ${SPRINTS.length} sprints. Showing ${n} sprint${n>1?'s':''}.`;
+}
+
+// ── ROW COLLAPSE TOGGLES (injected by inject_row_toggles.py) ──
+const ROW_TOGGLE_TARGETS = {'sprint-table': 10, 'flow-table': 10, 'vel-table': 15, 'cynefin-table': 99};
+function applyRowToggles() {
+  for (const [tbodyId, defaultN] of Object.entries(ROW_TOGGLE_TARGETS)) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) continue;
+    // Remove any existing toggle footer we previously added below this tbody's <table>
+    const tableEl = tbody.closest('table');
+    if (!tableEl) continue;
+    const card = tableEl.closest('.card');
+    if (!card) continue;
+    const existing = card.querySelector('.row-toggle');
+    if (existing) existing.remove();
+
+    const rows = Array.from(tbody.children);
+    if (rows.length <= defaultN) continue;
+
+    // Initially collapse rows beyond defaultN
+    let expanded = false;
+    const apply = () => {
+      rows.forEach((tr, i) => tr.classList.toggle('row-hidden', !expanded && i >= defaultN));
+      label.textContent = expanded
+        ? `Showing all ${rows.length} rows`
+        : `Showing ${defaultN} of ${rows.length}`;
+      btn.textContent = expanded ? 'Collapse' : `Show all (${rows.length - defaultN} hidden)`;
+    };
+    const footer = document.createElement('div');
+    footer.className = 'row-toggle';
+    const label = document.createElement('span');
+    const btn = document.createElement('button');
+    btn.onclick = () => { expanded = !expanded; apply(); };
+    footer.appendChild(label); footer.appendChild(btn);
+    card.appendChild(footer);
+    apply();
+  }
+}
+
+// Wrap render() so toggles re-apply on slider change
+if (typeof render === 'function' && !render.__wrappedForRowToggle) {
+  const _origRender = render;
+  render = function() { _origRender.apply(this, arguments); applyRowToggles(); };
+  render.__wrappedForRowToggle = true;
+}
+// First-time apply (in case render already fired on load)
+applyRowToggles();
+
+// ── MODEL BREAKDOWN (injected by inject_model_breakdown.py) ──
+const MODEL_COLORS = {
+  'claude-opus-4-7':'#a371f7','claude-opus-4-8':'#a371f7',
+  'claude-sonnet-4-6':'#58a6ff','claude-sonnet-4-5':'#58a6ff',
+  'claude-haiku-4-5':'#3fb950','claude-haiku-4-5-20251001':'#3fb950',
+  '(unknown)':'#8b949e','<synthetic>':'#d29922',
+};
+const MODEL_SHORT = m => m
+  .replace('claude-','')
+  .replace('-20251001','')
+  .replace('opus','Opus')
+  .replace('sonnet','Sonnet')
+  .replace('haiku','Haiku');
+
+function renderModelBreakdown() {
+  const sp = getFilteredSprints();
+  const sprintIds = new Set(sp.map(s => s.sid));
+  const mbRows = ALL_DATA.filter(r => r.record_type === 'model_breakdown' && sprintIds.has(r.session_id));
+  if (!mbRows.length) return;
+
+  // Pricing constants for splitting cost-by-token-type
+  const PRICING = {
+    'claude-opus-4-7':           {i:15.0, o:75.0},
+    'claude-opus-4-8':           {i:15.0, o:75.0},
+    'claude-sonnet-4-6':         {i: 3.0, o:15.0},
+    'claude-sonnet-4-5':         {i: 3.0, o:15.0},
+    'claude-haiku-4-5':          {i: 1.0, o: 5.0},
+    'claude-haiku-4-5-20251001': {i: 1.0, o: 5.0},
+    '(unknown)':                 {i: 3.0, o:15.0},
+    '<synthetic>':               {i: 0.0, o: 0.0},
+  };
+  const priceFor = m => PRICING[m] || PRICING['(unknown)'];
+  const cost_in = r => r.input_tokens * priceFor(r.model).i / 1e6;
+  const cost_out = r => r.output_tokens * priceFor(r.model).o / 1e6;
+  const cost_cr = r => r.cache_read_tokens * priceFor(r.model).i * 0.1 / 1e6;
+  const cost_cw = r => r.cache_create_tokens * priceFor(r.model).i * 1.25 / 1e6;
+
+  // Group by model
+  const byModel = {};
+  for (const r of mbRows) {
+    const m = r.model;
+    if (!byModel[m]) byModel[m] = {turns:0, input:0, cache_read:0, cache_create:0, output:0, cost:0, sprints:new Set()};
+    const b = byModel[m];
+    b.turns += r.turns; b.input += r.input_tokens; b.cache_read += r.cache_read_tokens;
+    b.cache_create += r.cache_create_tokens; b.output += r.output_tokens; b.cost += r.cost_usd;
+    b.sprints.add(r.session_id);
+  }
+  const models = Object.keys(byModel);
+
+  // ── Top stats ──
+  const totalCost = mbRows.reduce((a,r) => a + r.cost_usd, 0);
+  const totalTurns = mbRows.reduce((a,r) => a + r.turns, 0);
+  const totalCR = mbRows.reduce((a,r) => a + cost_cr(r), 0);
+  const totalCW = mbRows.reduce((a,r) => a + cost_cw(r), 0);
+  const totalOut = mbRows.reduce((a,r) => a + cost_out(r), 0);
+  const totalIn = mbRows.reduce((a,r) => a + cost_in(r), 0);
+  const dominantModel = models.length ? models.reduce((a,b) => byModel[a].turns > byModel[b].turns ? a : b) : '—';
+  const costPerSprint = sp.length ? (totalCost / sp.length) : 0;
+  const cacheReadPct = totalCost > 0 ? (totalCR/totalCost*100) : 0;
+  document.getElementById('cost-stats').innerHTML = `
+    <div class="stat"><div class="stat-value">$${totalCost.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}</div><div class="stat-label">Total Cost (list)</div><div class="stat-sub">${sp.length} sprints &middot; at API list price</div></div>
+    <div class="stat"><div class="stat-value">$${costPerSprint.toFixed(0)}</div><div class="stat-label">Avg / Sprint</div><div class="stat-sub">USD</div></div>
+    <div class="stat"><div class="stat-value">${cacheReadPct.toFixed(0)}%</div><div class="stat-label">Cache-Read Share</div><div class="stat-sub">of total cost</div></div>
+    <div class="stat"><div class="stat-value">${MODEL_SHORT(dominantModel)}</div><div class="stat-label">Dominant Model</div><div class="stat-sub">by turn count</div></div>
+  `;
+
+  // ── Cost per sprint by model (stacked bar) ──
+  const labels = sp.map(s => s.date + ' ' + (s.sid || '').slice(0,12));
+  const datasets = models.map(m => ({
+    label: MODEL_SHORT(m),
+    backgroundColor: MODEL_COLORS[m] || '#8b949e',
+    data: sp.map(s => {
+      const r = mbRows.find(r => r.session_id === s.sid && r.model === m);
+      return r ? +(r.cost_usd.toFixed(4)) : 0;
+    }),
+    borderRadius: 4,
+  }));
+  makeChart('cost-by-model', {
+    type:'bar',
+    data:{labels, datasets},
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{boxWidth:12, padding:12}},
+        tooltip:{callbacks:{label:ctx => ctx.dataset.label+': $'+ctx.raw.toFixed(2)}}},
+      scales:{x:{stacked:true, grid:{display:false}, ticks:{maxRotation:60, minRotation:45, font:{size:9}}},
+              y:{stacked:true, beginAtZero:true, grid:{color:gc}, ticks:{callback:v=>'$'+v}}}}
+  });
+
+  // ── Tokens by model (horizontal bar) ──
+  makeChart('tokens-by-model', {
+    type:'bar',
+    data:{
+      labels: models.map(MODEL_SHORT),
+      datasets:[{
+        label:'Output tokens',
+        data: models.map(m => byModel[m].output),
+        backgroundColor: models.map(m => MODEL_COLORS[m] || '#8b949e'),
+        borderRadius: 4,
+      }]
+    },
+    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:ctx => 'output: '+ctx.raw.toLocaleString()+' tok'}}},
+      scales:{x:{beginAtZero:true, grid:{color:gc}, ticks:{callback:v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'k'}},
+              y:{grid:{display:false}}}}
+  });
+
+  // ── Model mix (donut by turns) ──
+  makeChart('model-mix', {
+    type:'doughnut',
+    data:{
+      labels: models.map(MODEL_SHORT),
+      datasets:[{data: models.map(m => byModel[m].turns), backgroundColor: models.map(m => MODEL_COLORS[m] || '#8b949e')}]
+    },
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{boxWidth:12, padding:12, font:{size:10}}},
+        tooltip:{callbacks:{label:ctx => ctx.label+': '+ctx.raw.toLocaleString()+' turns ('+(ctx.raw*100/totalTurns).toFixed(1)+'%)'}}}}
+  });
+
+  // ── Cost per sprint by TOKEN TYPE (stacked) ──
+  const TYPE_COLORS = {input:'#8b949e', output:'#a371f7', cache_read:'#58a6ff', cache_write:'#3fb950'};
+  const TYPE_LABELS = {input:'Input', output:'Output', cache_read:'Cache Read', cache_write:'Cache Write'};
+  const byType = (type) => sp.map(s => {
+    const rs = mbRows.filter(r => r.session_id === s.sid);
+    return +rs.reduce((a,r) => a + (type==='input'?cost_in(r):type==='output'?cost_out(r):type==='cache_read'?cost_cr(r):cost_cw(r)), 0).toFixed(4);
+  });
+  makeChart('cost-by-type', {
+    type:'bar',
+    data:{labels, datasets:['input','output','cache_read','cache_write'].map(t => ({
+      label: TYPE_LABELS[t], backgroundColor: TYPE_COLORS[t], data: byType(t), borderRadius: 4,
+    }))},
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{boxWidth:12, padding:12}},
+        tooltip:{callbacks:{label:ctx => ctx.dataset.label+': $'+ctx.raw.toFixed(2)}}},
+      scales:{x:{stacked:true, grid:{display:false}, ticks:{maxRotation:60, minRotation:45, font:{size:9}}},
+              y:{stacked:true, beginAtZero:true, grid:{color:gc}, ticks:{callback:v=>'$'+v}}}}
+  });
+
+  // ── Tokens by type (horizontal bar) ──
+  const tot_in = mbRows.reduce((a,r) => a + r.input_tokens, 0);
+  const tot_out = mbRows.reduce((a,r) => a + r.output_tokens, 0);
+  const tot_cr = mbRows.reduce((a,r) => a + r.cache_read_tokens, 0);
+  const tot_cw = mbRows.reduce((a,r) => a + r.cache_create_tokens, 0);
+  makeChart('tokens-by-type', {
+    type:'bar',
+    data:{labels:['Input','Output','Cache Read','Cache Write'],
+      datasets:[{data:[tot_in, tot_out, tot_cr, tot_cw],
+        backgroundColor:[TYPE_COLORS.input, TYPE_COLORS.output, TYPE_COLORS.cache_read, TYPE_COLORS.cache_write],
+        borderRadius:4}]},
+    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:ctx => ctx.raw.toLocaleString()+' tokens'}}},
+      scales:{x:{beginAtZero:true, grid:{color:gc}, ticks:{callback:v => v >= 1e9 ? (v/1e9).toFixed(1)+'B' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : (v/1e3).toFixed(0)+'k'}},
+              y:{grid:{display:false}}}}
+  });
+
+  // ── Tokens per sprint stacked by type ──
+  const tokSet = (t) => sp.map(s => {
+    const rs = mbRows.filter(r => r.session_id === s.sid);
+    if (t==='input') return rs.reduce((a,r) => a + r.input_tokens, 0);
+    if (t==='output') return rs.reduce((a,r) => a + r.output_tokens, 0);
+    if (t==='cache_read') return rs.reduce((a,r) => a + r.cache_read_tokens, 0);
+    return rs.reduce((a,r) => a + r.cache_create_tokens, 0);
+  });
+  makeChart('tokens-per-sprint-type', {
+    type:'bar',
+    data:{labels, datasets:['input','output','cache_read','cache_write'].map(t => ({
+      label: TYPE_LABELS[t], backgroundColor: TYPE_COLORS[t], data: tokSet(t), borderRadius: 4,
+    }))},
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{boxWidth:12, padding:12, font:{size:10}}},
+        tooltip:{callbacks:{label:ctx => ctx.dataset.label+': '+ctx.raw.toLocaleString()}}},
+      scales:{x:{stacked:true, grid:{display:false}, ticks:{maxRotation:60, minRotation:45, font:{size:9}}},
+              y:{stacked:true, beginAtZero:true, grid:{color:gc}, ticks:{callback:v => v >= 1e9 ? (v/1e9).toFixed(1)+'B' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : (v/1e3).toFixed(0)+'k'}}}}
+  });
+
+  // ── Model + token cost table ──
+  const mct = document.getElementById('model-cost-table');
+  mct.innerHTML = '';
+  const sorted = models.slice().sort((a,b) => byModel[b].cost - byModel[a].cost);
+  for (const m of sorted) {
+    const b = byModel[m];
+    const fmt = n => n >= 1e9 ? (n/1e9).toFixed(2)+'B' : n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : n.toLocaleString();
+    mct.innerHTML += `<tr>
+      <td><span style="color:${MODEL_COLORS[m] || '#8b949e'}">●</span> ${MODEL_SHORT(m)}</td>
+      <td class="num">${b.sprints.size}</td>
+      <td class="num">${b.turns.toLocaleString()}</td>
+      <td class="num">${fmt(b.input)}</td>
+      <td class="num">${fmt(b.output)}</td>
+      <td class="num">${fmt(b.cache_read)}</td>
+      <td class="num">${fmt(b.cache_create)}</td>
+      <td class="num" style="color:var(--accent);font-weight:600">$${b.cost.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}</td>
+    </tr>`;
+  }
+}
+
+// Wrap render() to also render the model breakdown
+if (typeof render === 'function' && !render.__wrappedForModelBreakdown) {
+  const _origRender = render;
+  render = function() { _origRender.apply(this, arguments); renderModelBreakdown(); };
+  render.__wrappedForModelBreakdown = true;
+}
+renderModelBreakdown();
+
+// Auto-render embedded data — delay until layout is ready
+window.addEventListener("load", function() {
+  buildSprints();
+  initSlider();
+  render();
+});
+</script>
+</body>
+</html>

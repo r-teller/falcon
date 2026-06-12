@@ -283,6 +283,36 @@ worker_bg_isolation: null   # v7.0.0+. Values: null (inherit project setting) |
                             # Claude Code's built-in default (currently isolated). Per-
                             # dispatch override via the two --bg-* flags.
 
+worker_model: "inherit"     # v7.4.0+. Model the worker session runs. Values: "inherit"
+                            # (default — omit --model at launch; worker gets the
+                            # environment default, identical to pre-v7.4.0 behavior) |
+                            # any valid model ID accepted by `claude --model`.
+                            # Set by steering at Step 2 from the Step 1 proposal surface
+                            # (user can override the proposal). Consumed by the --bg
+                            # launch wiring. ENFORCEABLE IN --bg MODE ONLY (same caveat
+                            # as worker_thinking_mode below): in via-paste/paste modes
+                            # no launch runs, so the field is recorded but advisory —
+                            # the worker tab runs whatever model the operator launched.
+                            # Readers (crons, /falcon status, /wrapup) get ground truth
+                            # only when worker_dispatch_mode == "bg"; otherwise this is
+                            # what was REQUESTED, not what runs — cross-check
+                            # worker_dispatch_mode before reporting it as fact.
+                            # respawn-fresh successors reuse this value (per-respawn
+                            # override is fdev-334, future). Missing field = "inherit"
+                            # (pre-v7.4.0 dispatch files need no migration).
+
+worker_thinking_mode: "inherit"   # v7.4.0+. Extended-thinking budget for the worker.
+                                  # Values: "inherit" (default — no env injected) |
+                                  # "none" | "think" | "ultrathink". Delivered via
+                                  # MAX_THINKING_TOKENS env on the claude --bg launch
+                                  # (none=0, think=10000, ultrathink=31999) — session-wide
+                                  # for the worker's whole lifecycle. ENFORCEABLE IN --bg
+                                  # MODE ONLY: steering owns the spawned process env. In
+                                  # via-paste/paste modes the field is recorded but
+                                  # advisory (the operator's existing tab env is not
+                                  # steering-controlled) — note it in the dispatch prompt
+                                  # if it matters. Missing field = "inherit".
+
 worker_bg_prior_sessions: []   # v7.0.0+. Read-only forensic record of replaced workers,
                                # oldest first. Each entry:
                                #   - session_id: "<short-id>"
@@ -445,17 +475,23 @@ START: /falcon work beads <spec> [<flags>]
   └────────────────────────────────────────────────────────────────────────┘
   │
   ▼
-  ┌─ disableAgentView check: read .claude/settings.json (project wins) ────┐
-  │   then ~/.claude/settings.json (user-level fallback)                    │
+  ┌─ disableAgentView check (v7.0.1): four-file cascade, first non-null    ┐
+  │   wins, in precedence order:                                           │
+  │     1. <repo>/.claude/settings.local.json                              │
+  │     2. <repo>/.claude/settings.json                                    │
+  │     3. ~/.claude/settings.local.json                                   │
+  │     4. ~/.claude/settings.json                                         │
   │                                                                        │
-  │  EITHER true → emit: "agent-view disabled by <project|user>            │
-  │                       settings.json. Auto-downgrading to --via-paste." │
+  │  first non-null == true →                                              │
+  │     emit: "agent-view disabled by <source> settings (<file-path>).     │
+  │            Auto-downgrading to --via-paste."                           │
+  │     (+ advisory note if worker_model/thinking ≠ inherit — v7.4.0)      │
   │              → effective mode = --via-paste (auto-downgrade)           │
   │              → emit DISPATCH PROMPT paste-block                        │
   │              → write worker_dispatch_mode: "via-paste"                 │
   │              → done                                                    │
   │                                                                        │
-  │  BOTH false (or absent) → continue ↓                                   │
+  │  all null or false → continue ↓                                        │
   └────────────────────────────────────────────────────────────────────────┘
   │
   ▼
@@ -463,7 +499,10 @@ START: /falcon work beads <spec> [<flags>]
   │   → resolve worktree isolation per the sub-tree below                  │
   │   → compute bootstrap from REFERENCE.md template                       │
   │     (substitutes dispatch_id + repo_path)                              │
-  │   → Bash: claude --bg --name "falcon-<id>" "<bootstrap>" [<isol-flag>] │
+  │   → Bash: [MAX_THINKING_TOKENS=<n>] claude --bg [--model <id>]         │
+  │           --name "<prefix>-falcon-<id>" "<bootstrap>" [<isol-flag>]    │
+  │     (bracketed parts from worker_model/worker_thinking_mode; v7.4.0;   │
+  │      inherit = omit — launch identical to pre-7.4.0)                   │
   │   → capture returned short session ID                                  │
   │   → write worker_bg_session_id + worker_dispatch_mode: "bg"            │
   │   → emit one-line confirmation:                                        │
@@ -641,7 +680,7 @@ In `--bg` mode (when `worker_dispatch_mode == "bg"` on this dispatch file), arm 
 
 ## Bootstrap Prompt Template (v7.0.0)
 
-The CLI argument passed to `claude --bg --name "falcon-<dispatch-id>" "<bootstrap>"` at PROTOCOL.md Step 2 in `--bg` mode. Intentionally SHORT (~5 lines) — the full multi-line dispatch prompt content stays in the dispatch file's `init_prompt` field (where it already lives for all modes), eliminating shell-quoting concerns for multi-line content with backticks/quotes/etc. The bootstrap is a POINTER, not the spec itself.
+The CLI argument passed to `claude --bg --name "<prefix>-falcon-<dispatch-id>" "<bootstrap>"` at PROTOCOL.md Step 2 in `--bg` mode (plus the conditional v7.4.0 `--model` / `MAX_THINKING_TOKENS` injection per Wiring item 2 — neither changes the bootstrap text itself). Intentionally SHORT (~5 lines) — the full multi-line dispatch prompt content stays in the dispatch file's `init_prompt` field (where it already lives for all modes), eliminating shell-quoting concerns for multi-line content with backticks/quotes/etc. The bootstrap is a POINTER, not the spec itself.
 
 **Substitution variables:** `{{ dispatch_id }}` (literal 6hex ID) and `{{ repo_path }}` (absolute path to the main checkout). Substituted by steering at dispatch invocation time. No other variables; no environment-conditional branches.
 
@@ -684,6 +723,16 @@ Same rationale applies to the worker's subsequent reads (project rules files, di
 ### Continuation-mode branch (when `dispatch_continuation: true`)
 
 The bootstrap template is the same for initial dispatch and respawn-fresh successor dispatch — both substitute the same `{{ dispatch_id }}` + `{{ repo_path }}`. The difference is the dispatch file's `dispatch_continuation` field, which the successor's bootstrap detects on load and uses to route into the three-step recovery sequence (per PROTOCOL.md `### --bg dispatch mode (v7.0.0)` continuation branch) BEFORE entering normal Worker Lifecycle. The bootstrap line about continuation makes the branch explicit — the worker reads "if dispatch_continuation: true ..." and executes the recovery before any other action.
+
+### Thinking-mode delivery — why not a bootstrap keyword (v7.4.0)
+
+`worker_thinking_mode` is delivered via the `MAX_THINKING_TOKENS` env var on the `claude --bg` invocation (PROTOCOL.md `### --bg dispatch mode`, Wiring item 2), NOT by prepending a thinking keyword (`ultrathink`, "think hard") to this bootstrap. Rationale:
+
+1. **Scope.** A prompt keyword influences the turn that carries it; the env var applies to every turn of the worker's session. Workers run dozens of turns — per-turn keyword delivery would silently decay after the first response.
+2. **Determinism.** Numeric budgets (`none` → 0, `think` → 10000, `ultrathink` → 31999) are explicit; keyword→budget mapping is a heuristic that can shift between Claude Code versions.
+3. **Template stability.** The bootstrap stays a pure pointer (~5 lines, three REQUIRED elements). No conditional branches keyed on dispatch fields — the same template serves initial dispatch and respawn-fresh continuation unchanged.
+
+The bootstrap template above is therefore IDENTICAL whether or not a thinking mode is set. Mode applicability caveat: env delivery only works where steering owns the process spawn (`--bg`); `--via-paste`/`--paste` dispatches record `worker_thinking_mode` as advisory (see the schema field note).
 
 ### No `bootstrap_prompt` schema field
 
@@ -826,6 +875,16 @@ Re-read .claude/tmp/falcon-dispatch-abc123.yaml.
 ## Dispatch Prompt Template
 
 The steering session emits a SHORT prompt (10-20 lines) for the user to paste into the worker session. The worker reads the dispatch file as its first action.
+
+**Advisory model/thinking line (v7.4.0, conditional):** when `worker_dispatch_mode != "bg"` AND either `worker_model` or `worker_thinking_mode` is non-`inherit`, append this line after the `Dispatch ID:` line inside the fence — it is the only delivery surface those fields have outside `--bg`:
+
+    Requested worker model/thinking: {{ worker_model }} / {{ worker_thinking_mode }}
+    (ADVISORY — not enforced in this mode. To honor: relaunch this tab as
+    `MAX_THINKING_TOKENS=<budget> claude --model <model-id>`, or accept the
+    tab's current model and prepend a thinking keyword per-message, which is
+    turn-scoped.)
+
+Omit the line entirely when both fields are `inherit` (the overwhelmingly common case — zero added prompt weight).
 
     ## DISPATCH PROMPT — dispatch {{ dispatch_id }} at {{ created_utc }}
 

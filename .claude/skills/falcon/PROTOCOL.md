@@ -27,6 +27,17 @@ If the project's conventions require sanitizing or filtering bead content before
 
 Heuristic for derivation: parse the bead's "Changes Needed" table; group entries by common path prefix; promote prefixes touched by 3+ entries to a `directories[]` entry; keep singleton paths as `files[]` entries. Show the derived scope to the user before lock-check; user can correct (add/remove directories, narrow scope) before dispatch.
 
+**Worker model + thinking-mode proposal (v7.4.0):** at the same surface where the derived `file_scope` is shown for confirmation, steering also proposes the worker's model and thinking mode with a one-line rationale. Inputs: the bead set's `cynefin:*` labels, issue types, and Effort Forecast totals. Selection heuristic (guidance, not hard policy — model IDs are illustrative and drift; check your installed model lineup):
+
+| Bead set shape | Proposed model | Proposed thinking |
+|---|---|---|
+| All `cynefin:clear` chores/docs | small/fast tier (e.g., a Haiku-class model) | `none` |
+| `cynefin:complicated` implementation | mid tier (e.g., a Sonnet-class model) | `think` |
+| Any `cynefin:complex` bead, or forecast > ~30 turns | steering-tier model | `ultrathink` |
+| Unsure / mixed signals | `inherit` | `inherit` |
+
+Emit one line: `Worker model: <model-id|inherit>, thinking: <none|think|ultrathink|inherit> — <rationale>. Override?` The user accepts or overrides (any valid model ID or mode) before the dispatch file is written. The accepted values are recorded as `worker_model` + `worker_thinking_mode` at Step 2 write-time. **`inherit` is the default for both** — it omits the `--model` flag and the thinking env entirely, preserving pre-v7.4.0 launch behavior exactly. **Model AND thinking-mode enforcement are `--bg`-only** (steering owns the spawned process and its environment); in `--via-paste`/`--paste` modes both recorded values are advisory (see REFERENCE.md schema notes). When the settings/version checks make a downgrade predictable, append "(advisory — this dispatch will resolve to via-paste)" to the emitted proposal line.
+
 **Self-conflict check:** if the same dispatch claims multiple beads whose file_scopes overlap (e.g., bead A and bead B both touch `score-tracker/workbench/routes.py`), the dispatch is self-conflicting. Default behavior is to reject at the bead-resolution step BEFORE writing to the lock registry. Tell the user: `"Beads A and B cannot share a single dispatch — both claim <path>. Split into separate dispatches OR consolidate the touch points first OR re-invoke with --sequential to opt one worker into handling both in order."`
 
 **Self-conflict override with `--sequential` (v6.4.0):** when the user invokes `/falcon work beads A,B --sequential`, the HARD-reject is replaced by a single-worker sequential-handling resolution:
@@ -109,6 +120,7 @@ Before writing the dispatch file, check the lock registry:
 
 1. Write a per-dispatch YAML file at `.claude/tmp/falcon-dispatch-<6hex>.yaml` containing:
    - `dispatch_id`, `bead_ids[]`, `branch`, `repo_path`, `file_scope` (from Step 1, optionally expanded in Step 1b)
+   - `worker_model` + `worker_thinking_mode` (v7.4.0+): the values accepted at the Step 1 model/thinking proposal surface (default `inherit` for both). Consumed by the `--bg` launch wiring below; recorded so crons, `/falcon status`, and `/wrapup` can read what the worker is running (`--bg`) — or what was requested-but-advisory (`via-paste`/`paste`; cross-check `worker_dispatch_mode` before treating these as ground truth).
    - `session_status: active` — set by steering; worker checks on resume prompts; transitions: `active → amendments_pending → complete` (steering sets complete via `/falcon release`)
    - `required_context[]` (v7.2.0+): union of `.claude/*.md` file paths from each bead's `## Required Context` section. Populate via:
 
@@ -147,7 +159,7 @@ As of v7.0.0, `/falcon work beads <spec>` (no mode flag) defaults to `--bg` mode
 
 1. **Mode override check.** If user explicitly passed `--via-paste`, `--paste`, `--bg-isolated`, or `--bg-no-isolation`, capture the explicit mode and skip the auto-detection branches. Mutually-exclusive flag combos (`--bg + --paste`, `--via-paste + --paste`, `--bg-isolated + --bg-no-isolation`) fail with an informative error before any other action.
 2. **Version gate (cheapest, fails fast).** Run `claude --version`; parse semver. Require >= 2.1.139.
-   - On failure: emit one-line note `--bg requires Claude Code >= 2.1.139 (detected: <version>). Auto-downgrading to --via-paste. Upgrade Claude Code OR pass --via-paste explicitly to suppress this message.` Set effective mode to `--via-paste`.
+   - On failure: emit one-line note `--bg requires Claude Code >= 2.1.139 (detected: <version>). Auto-downgrading to --via-paste. Upgrade Claude Code OR pass --via-paste explicitly to suppress this message.` Set effective mode to `--via-paste`. If `worker_model` or `worker_thinking_mode` is non-`inherit`, append: `Note: worker model/thinking selection becomes advisory in this mode (not enforced).`
    - **Detection authority — do NOT consult `claude --help`.** As of Claude Code's current `--help` output, `--bg` is NOT listed among the printed flags despite being supported on 2.1.139+. Implementers (and AI assistants doing falcon-related work) that probe `claude --help | grep -- --bg` will get an empty result and incorrectly conclude `--bg` is unsupported. The version gate above is the canonical check. If you (or another agent) reach for `--help` as a fallback verification, stop — trust `claude --version >= 2.1.139` and let the dispatch itself surface any real incompatibility downstream.
 3. **`disableAgentView` settings check (v7.0.1, fdev-lbq.26 — four-file cascade).** Walk these four candidate settings files in this precedence order, taking the first non-null value:
    - `<repo>/.claude/settings.local.json` (project-level machine-local; gitignored)
@@ -156,7 +168,7 @@ As of v7.0.0, `/falcon work beads <spec>` (no mode flag) defaults to `--bg` mode
    - `~/.claude/settings.json` (user-level committed)
 
    This matches Claude Code's own settings precedence (see https://code.claude.com/docs/en/settings). Operators encoding machine-local overrides in `.local.json` (the conventional location for per-machine config that should NOT be committed) get those honored.
-   - If `disableAgentView: true` in any of the four: emit `agent-view disabled by <project-local|project|user-local|user> settings (<file-path>). Auto-downgrading to --via-paste.` Set effective mode to `--via-paste`.
+   - If `disableAgentView: true` in any of the four: emit `agent-view disabled by <project-local|project|user-local|user> settings (<file-path>). Auto-downgrading to --via-paste.` Set effective mode to `--via-paste`. If `worker_model` or `worker_thinking_mode` is non-`inherit`, append: `Note: worker model/thinking selection becomes advisory in this mode (not enforced).`
 4. **Success path.** Emit one-line confirmation `Dispatch mode: --bg (agent-view v<version> detected; isolated: <yes|no>)` so the user sees the default mode + the version + worktree-isolation choice that drove the dispatch shape.
 5. Set `worker_dispatch_mode: <"bg" | "via-paste" | "paste">` on the dispatch file at Step 2 write-time.
 
@@ -173,8 +185,14 @@ When the effective mode is `--bg` (either default or explicit), after Step 1c (l
 1. Steering computes the bootstrap from the literal template in [`REFERENCE.md`](./REFERENCE.md#bootstrap-prompt-template-v700) `### Bootstrap Prompt Template (v7.0.0)`, substituting `dispatch_id` + `repo_path`. Bootstrap MUST include the literal `dispatch_id`, the absolute `repo_path`, and an instruction to VERIFY the loaded dispatch file's `dispatch_id` matches once read (mitigates the residual concern that steering code logic could pass a wrong ID — see "Architectural shifts" in the v7.0.0 changelog).
 2. Steering invokes (via Bash):
    ```
-   claude --bg --name "<prefix>-falcon-<dispatch-id>" "<bootstrap>"
+   [MAX_THINKING_TOKENS=<budget>] claude --bg [--model <model-id>] --name "<prefix>-falcon-<dispatch-id>" "<bootstrap>"
    ```
+   **Model + thinking-mode injection (v7.4.0):** both bracketed parts come from the dispatch file's `worker_model` / `worker_thinking_mode` fields (set at Step 1's proposal surface; default `inherit`):
+   - `worker_model: inherit` → OMIT the `--model` flag entirely (worker gets the environment default — identical to pre-v7.4.0 behavior). Any other value → append `--model <value>` verbatim.
+   - `worker_thinking_mode: inherit` → OMIT the env prefix. Otherwise prefix the invocation with `MAX_THINKING_TOKENS=<budget>` using the mapping: `none` → `0`, `think` → `10000`, `ultrathink` → `31999`. The env var applies session-wide to the worker — every turn of its lifecycle, unlike a prompt keyword which only influences the turn that carries it. This is why the mechanism is the env var and NOT an `ultrathink` keyword prepended to the bootstrap (see REFERENCE.md `### Thinking-mode delivery — why not a bootstrap keyword`).
+   - Both `inherit` → the invocation is byte-identical to pre-v7.4.0 dispatches. A dispatch file missing either field (pre-v7.4.0 dispatches, continuation recovery) is treated as `inherit` — no migration needed.
+   - `/falcon respawn-fresh` successors reuse the dispatch file's recorded values at respawn launch (a per-respawn `--model` override is fdev-334, not yet shipped).
+
    **Session-name prefix (v7.0.1, fdev-lbq.17):** `<prefix>` is the bd project prefix detected via `bd config get database.prefix` (or equivalent inspection of `.beads/`). Falls back to bare `falcon-<dispatch-id>` if no bd workspace is detected (operator using falcon outside a bd-managed project). Rationale: when multiple projects operate concurrently, `claude agents` rows look like `fdev-falcon-a3f8e9`, `myapp-falcon-b27c41` — project sorts first, so all dispatches within a project cluster together visually. Complements `claude agents --cwd <path>` (v2.1.141+) which provides per-directory filtering at the CLI level.
 
    If `--bg-isolated` is set: append `--worktree` (or whichever Claude Code flag triggers isolation; flag name defers to Claude Code's CLI). If `--bg-no-isolation`: append the Claude-Code-side opt-out flag. If neither: defer to the project's `worktree.bgIsolation` setting; if no setting, defer to Claude Code's default.
@@ -572,6 +590,7 @@ Steering prints a preview block summarizing what would have happened:
 
 - Resolved bead set (IDs + titles + triage states)
 - Derived `file_scope` (directories + files; union for `--sequential`)
+- Proposed worker model + thinking mode (v7.4.0) — the values that would be recorded as `worker_model` / `worker_thinking_mode`, the rationale line, and the resulting launch shape (`--model` flag + `MAX_THINKING_TOKENS` prefix, or "inherit — launch unchanged")
 - Lock-registry check result (`clean` or `overlap with dispatch <id> on <path>`)
 - Autopilot policy effects (which flags would fire — Phase 1: `--watch` cron cadence + offset preview; future phases: `SAFE_TO_ACK_INTENT` gate preview, `SAFE_TO_AMEND` preview, `--amendment-budget` cap)
 - Cron prompt body (if `--watch` / `--autopilot` co-set) — the literal string CronCreate would have received
@@ -1012,10 +1031,10 @@ Implementation:
    Invoke via Bash:
 
    ```
-   claude --bg --name "falcon-<dispatch-id>-r<N>" "<bootstrap from REFERENCE.md template>"
+   [MAX_THINKING_TOKENS=<budget>] claude --bg [--model <model-id>] --name "<prefix>-falcon-<dispatch-id>-r<N>" "<bootstrap from REFERENCE.md template>"
    ```
 
-   Inherit the same worktree-isolation flag the original dispatch used (read from `worker_bg_isolation`; respect the same default-fallback chain). The bootstrap substitutes `dispatch_id` + `repo_path` (same template as initial dispatch).
+   Inherit the same worktree-isolation flag the original dispatch used (read from `worker_bg_isolation`; respect the same default-fallback chain). Reuse the dispatch file's recorded `worker_model` + `worker_thinking_mode` for the bracketed injections, with the same `inherit`-omits rules as the initial launch (v7.4.0; per-respawn override is fdev-334, future). The bootstrap substitutes `dispatch_id` + `repo_path` (same template as initial dispatch).
 
 6. **Capture new session ID; update `worker_bg_session_id`.**
 

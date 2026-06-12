@@ -2,6 +2,41 @@
 
 Version history for the falcon skill. Current version is in `SKILL.md` frontmatter (`version:` field).
 
+## 7.4.0 (2026-06-11)
+
+**Worker model + thinking-mode selection at pre-dispatch review.** Steering proposes — and the user can override — the worker's model and extended-thinking budget per dispatch, recorded in the dispatch file and injected into the `claude --bg` launch. Gives per-dispatch cost/capability control: a doc-only chore can run on a small model; a `cynefin:complex` bead can get the steering-tier model with `ultrathink`.
+
+### Dispatch yaml schema additions (REFERENCE.md)
+
+- New field `worker_model` (default `"inherit"`) — `inherit` omits `--model` at launch (pre-7.4.0 behavior); any other value is passed verbatim as `--model <value>`. Placed in the worker_* spawn-parameter cluster.
+- New field `worker_thinking_mode` (default `"inherit"`) — values `inherit | none | think | ultrathink`, delivered via `MAX_THINKING_TOKENS` env on the launch (`none`=0, `think`=10000, `ultrathink`=31999). Enforceable in `--bg` mode only; advisory in `--via-paste`/`--paste`.
+- **Backward compatible:** dispatch files missing either field (all pre-7.4.0 dispatches, continuation recovery) behave as `inherit` — no migration.
+
+### PROTOCOL.md additions
+
+- Step 1: "Worker model + thinking-mode proposal" surface — proposal + one-line rationale (inputs: cynefin labels, types, effort forecast) emitted alongside the derived `file_scope` confirmation; user accepts or overrides. Heuristic table is guidance, not policy; model IDs are illustrative.
+- Step 2: the two fields join the dispatch-file write list.
+- `### --bg dispatch mode` Wiring item 2: launch template is now `[MAX_THINKING_TOKENS=<budget>] claude --bg [--model <id>] --name ...` with both parts conditional on non-`inherit` values. respawn-fresh successors reuse recorded values (per-respawn override deferred to fdev-334).
+- `### --dry-run mode`: preview block gains the proposed model/thinking line.
+
+### Design decision: env var, not bootstrap keyword
+
+Thinking-mode delivery uses `MAX_THINKING_TOKENS` at spawn rather than prepending `ultrathink` to the bootstrap: env applies session-wide (keywords influence one turn), budgets are deterministic, and the bootstrap stays a pure pointer. Documented in REFERENCE.md `### Thinking-mode delivery — why not a bootstrap keyword`; recorded in the workshop's architecture.md Design Decisions.
+
+### Pre-release hardening (same-day, 10-persona validation run)
+
+- **Advisory semantics widened to BOTH fields:** `worker_model` is as advisory as `worker_thinking_mode` outside `--bg` (no launch runs in via-paste/paste) — schema comment, Step 1 caveat, and the "what the worker is running" claims now say so, with a cross-check-`worker_dispatch_mode` instruction for status consumers.
+- **Downgrade messages** (version gate + `disableAgentView`) append an advisory note when model/thinking is non-`inherit` — the moment enforcement evaporates is now the moment the operator hears about it.
+- **Dispatch Prompt Template** gains a conditional advisory line (via-paste/paste + non-`inherit` only) with concrete honoring instructions (relaunch with env, or per-message keyword with its turn-scoped caveat).
+- **Respawn-fresh consistency:** COMMANDS.md step 3 now shows the bracketed injections + recorded-value reuse (was silent — an implementer following COMMANDS.md alone would have dropped a model pin on respawn); respawn `--name` gains the `<prefix>-` it was missing.
+- **Decision-tree staleness:** `disableAgentView` box redrawn to the v7.0.1 four-file cascade (was two-file); launch boxes gain the `<prefix>-` name shape; bootstrap-section intro notes the v7.4.0 conditional injection.
+
+### Companion (kit scripts, same release)
+
+- `velocity-report.py`: template path fixed (`../velocity.html` never existed — report generation was broken); new same-dir kit-shape `velocity.html` dashboard template; dual-shape embed; regex-injection bug fixed (non-ASCII crashed the generator, backslashes silently corrupted the embedded data); malformed jsonl lines now counted to stderr instead of silently skipped.
+
+Companion: COMMANDS.md `--dry-run` shown-list updated. Unblocks fdev-334 (respawn-fresh `--model`) and fdev-35d (autopilot per-bead-type model defaults).
+
 ## 7.3.0 (2026-06-10)
 
 **Required Context contract integration — dispatch yaml carries `required_context[]`; worker reports `unlisted_context_reads[]`.** Aligns falcon with the hydrated-bead contract introduced in `.claude/docs/work-item-templates.md` (new `## Required Context` section spec) and consumed by `navigator-recon` v1.4.0.

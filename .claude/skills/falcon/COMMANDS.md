@@ -193,7 +193,7 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-ha
 
 1. Read the dispatch file at `.claude/tmp/falcon-dispatch-<dispatch-id>.yaml`. Refuse if not found OR if `session_status: complete` (the dispatch is finished; respawn doesn't make sense). Refuse if `worker_dispatch_mode != "bg"` (respawn-fresh only applies to background-session dispatches).
 2. Append the current `worker_bg_session_id` + spawn timestamp + now + reason to `worker_bg_prior_sessions[]` (read-only forensic record; never re-claimed).
-3. Spawn new `claude --bg --name "falcon-<dispatch-id>-r<N>"` where N counts the respawn generation (initial dispatch = no suffix; first respawn = `-r2`; second = `-r3`; etc.). The bootstrap-prompt template substitutes `dispatch_id` + `repo_path` exactly as for an initial dispatch.
+3. Spawn new `[MAX_THINKING_TOKENS=<budget>] claude --bg [--model <model-id>] --name "<prefix>-falcon-<dispatch-id>-r<N>"` where N counts the respawn generation (initial dispatch = no suffix; first respawn = `-r2`; second = `-r3`; etc.). The bracketed parts reuse the dispatch file's recorded `worker_model`/`worker_thinking_mode` with the same inherit-omits rules as the initial launch (v7.4.0; missing fields = inherit; per-respawn override is fdev-334, future). The bootstrap-prompt template substitutes `dispatch_id` + `repo_path` exactly as for an initial dispatch.
 4. Update `worker_bg_session_id` to the new short ID.
 5. Set `dispatch_continuation: true` on the dispatch file so the new worker's bootstrap detects continuation mode and executes the three-step recovery sequence (see PROTOCOL.md `### --bg dispatch mode (v7.0.0)` for the bootstrap branch).
 6. **Confirmation-gated `claude stop` (per quartermaster R1):** print the suggested `claude stop <old-id>` command alongside a one-line confirmation prompt: `Prior session <id> may still be alive (reason: <reason>). Stop it? [y/n]`. On `y`, run `claude stop <old-id>` to free the dead session's process. On `n` (or anything else), skip — the prior entry stays in `worker_bg_prior_sessions[]` for forensics either way. Skip the prompt entirely if `--force` is passed.
@@ -369,7 +369,7 @@ For implementation walkthrough: see [`PROTOCOL.md`](./PROTOCOL.md#falcon-enable-
 
 ### `--bg` ✓
 
-**Default dispatch mode as of v7.0.0.** Steering invokes `claude --bg --name "falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool; the supervisor process spawns the worker as a detached background session observable via `claude agents`. No paste-into-tab required.
+**Default dispatch mode as of v7.0.0.** Steering invokes `claude --bg --name "<prefix>-falcon-<dispatch-id>" "<short-bootstrap>"` via the Bash tool (plus conditional `--model` / `MAX_THINKING_TOKENS` injection per PROTOCOL.md `### --bg dispatch mode` Wiring item 2 when `worker_model`/`worker_thinking_mode` ≠ inherit, v7.4.0); the supervisor process spawns the worker as a detached background session observable via `claude agents`. No paste-into-tab required.
 
 Why this is the default: the mapping between falcon's dispatch lifecycle and Claude Code's background-session model is essentially 1:1, with ergonomic wins — single agent-view UI monitors all dispatches, real-time `Working / Needs input / Completed` states, built-in peek-and-reply for INTENT-confirm pauses (Space → read INTENT → type `proceed <id>` → Enter), session persistence across machine sleep, no shell-quoting concerns for the dispatch prompt (passed as CLI arg pointer-style).
 
@@ -662,6 +662,7 @@ Print what the dispatch + cron would look like without writing the dispatch file
 
 - Resolved bead set (IDs + titles + triage states)
 - Derived `file_scope` (directories + files; union for `--sequential`)
+- Proposed worker model + thinking mode (v7.4.0) — `worker_model` / `worker_thinking_mode` values + rationale + resulting launch shape (`--model` flag + `MAX_THINKING_TOKENS` prefix, or "inherit — launch unchanged")
 - Lock-registry check result (overlap vs clean) — performed read-only; no entry registered
 - Autopilot policy effects (which flags would fire — Phase 1: `--watch` cron cadence + offset preview; future phases: `SAFE_TO_ACK_INTENT` gate preview, `SAFE_TO_AMEND` preview, `--amendment-budget` cap)
 - Cron prompt body (if `--watch` / `--autopilot` co-set) — the literal string `CronCreate` would have received
