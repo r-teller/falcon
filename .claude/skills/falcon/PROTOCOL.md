@@ -27,7 +27,21 @@ If the project's conventions require sanitizing or filtering bead content before
 
 Heuristic for derivation: parse the bead's "Changes Needed" table; group entries by common path prefix; promote prefixes touched by 3+ entries to a `directories[]` entry; keep singleton paths as `files[]` entries. Show the derived scope to the user before lock-check; user can correct (add/remove directories, narrow scope) before dispatch.
 
-**Worker model + thinking-mode proposal (v7.4.0):** at the same surface where the derived `file_scope` is shown for confirmation, steering also proposes the worker's model and thinking mode with a one-line rationale. Inputs: the bead set's `cynefin:*` labels, issue types, and Effort Forecast totals. Selection heuristic (guidance, not hard policy — model IDs are illustrative and drift; check your installed model lineup):
+**Worker model + thinking-mode proposal (v7.4.0; `--model` flag branching v7.5.0):** at the same surface where the derived `file_scope` is shown for confirmation, steering resolves the worker's model and thinking mode with a one-line rationale.
+
+**Orchestrator-owns-model invariant (HARD):** the model MUST be resolved here — at dispatch-file write time, before worker init — and the ORCHESTRATOR always indicates the model. The worker has no self-selection role at any point in the lifecycle. All three `--model` values below resolve before spawn; none defers resolution into the worker session.
+
+The model branch is driven by the `/falcon work beads --model <model-id|auto|inherit>` flag (v7.5.0; see COMMANDS.md `### --model`). Default — flag omitted — is `inherit`:
+
+- **`inherit` (default, ALL modes including `--autopilot`):** record `worker_model: inherit`; the `model_defaults` policy block is NOT consulted — policy never engages implicitly. Identical to shipped v7.4.0 default behavior.
+- **`<model-id>`:** record the named model verbatim as `worker_model`; rationale = "explicit --model flag".
+- **`auto`:** falcon picks, deterministically first:
+  1. Consult the `model_defaults` block in `.claude/rules/falcon-autopilot.md` (keyed by cynefin domain and/or bead type; see AUTOPILOT-RULES.md `## 7.`). A matching entry's value (a model ID, or `inherit`) becomes the proposal; rationale = "model_defaults: <matched key>".
+  2. No matching entry → falcon evaluates the bead set (cynefin labels, size, Effort Forecast totals) and proposes per the heuristic table below; rationale = the bead-evaluated reasoning.
+
+  Manual mode: the `auto` proposal surfaces at this interactive gate exactly like a v7.4.0 proposal — the user accepts or overrides. `--autopilot` mode: the proposal is auto-accepted; the choice + rationale are recorded in the dispatch file (`worker_model` + `worker_model_rationale`, see REFERENCE.md schema) and surfaced in the dispatch report.
+
+Selection heuristic for the `auto` bead-evaluated fallback (guidance, not hard policy — model IDs are illustrative and drift; check your installed model lineup). Thinking-mode proposals continue to come from this table in all cases (v7.4.0 behavior; the `--model` flag governs the model only):
 
 | Bead set shape | Proposed model | Proposed thinking |
 |---|---|---|
@@ -36,7 +50,7 @@ Heuristic for derivation: parse the bead's "Changes Needed" table; group entries
 | Any `cynefin:complex` bead, or forecast > ~30 turns | steering-tier model | `ultrathink` |
 | Unsure / mixed signals | `inherit` | `inherit` |
 
-Emit one line: `Worker model: <model-id|inherit>, thinking: <none|think|ultrathink|inherit> — <rationale>. Override?` The user accepts or overrides (any valid model ID or mode) before the dispatch file is written. The accepted values are recorded as `worker_model` + `worker_thinking_mode` at Step 2 write-time. **`inherit` is the default for both** — it omits the `--model` flag and the thinking env entirely, preserving pre-v7.4.0 launch behavior exactly. **Model AND thinking-mode enforcement are `--bg`-only** (steering owns the spawned process and its environment); in `--via-paste`/`--paste` modes both recorded values are advisory (see REFERENCE.md schema notes). When the settings/version checks make a downgrade predictable, append "(advisory — this dispatch will resolve to via-paste)" to the emitted proposal line.
+Emit one line: `Worker model: <model-id|inherit>, thinking: <none|think|ultrathink|inherit> — <rationale>. Override?` The user accepts or overrides (any valid model ID or mode) before the dispatch file is written. The accepted values are recorded as `worker_model` + `worker_thinking_mode` at Step 2 write-time (plus `worker_model_rationale` when the value came through `--model auto`). **`inherit` is the default for both** — it omits the `--model` flag and the thinking env entirely, preserving pre-v7.4.0 launch behavior exactly. **Model AND thinking-mode enforcement are `--bg`-only** (steering owns the spawned process and its environment); in `--via-paste`/`--paste` modes both recorded values are advisory (see REFERENCE.md schema notes). When the settings/version checks make a downgrade predictable, append "(advisory — this dispatch will resolve to via-paste)" to the emitted proposal line. `--sequential` dispatches resolve ONE model for the whole dispatch — the worker is a single session and a worker never switches models mid-session (session-boundary principle).
 
 **Self-conflict check:** if the same dispatch claims multiple beads whose file_scopes overlap (e.g., bead A and bead B both touch `score-tracker/workbench/routes.py`), the dispatch is self-conflicting. Default behavior is to reject at the bead-resolution step BEFORE writing to the lock registry. Tell the user: `"Beads A and B cannot share a single dispatch — both claim <path>. Split into separate dispatches OR consolidate the touch points first OR re-invoke with --sequential to opt one worker into handling both in order."`
 
@@ -108,6 +122,18 @@ Before writing the dispatch file, check the lock registry:
    - Run /falcon list-locks to see all active dispatches
    ```
 
+6b. **`--queue` variant (v7.6.0+):** when the dispatch was invoked with `--queue`, a lock conflict does NOT hard-reject. Instead, append a pending-dispatch entry to the cross-session queue file `.claude/tmp/falcon-queue.yaml` (absent file = empty queue; create it):
+
+   ```yaml
+   - queue_id: "<6hex>"            # fresh 6-hex id, distinct from dispatch ids
+     spec: "<original spec string, verbatim>"
+     flags: "<invocation flags, verbatim, minus --queue itself>"
+     enqueued_utc: "<ISO8601>"
+     enqueuing_session: "<session-id>"
+   ```
+
+   Report the queue position to the user ("queued at position N; re-evaluated on next lock release") and stop — no dispatch file is written, no lock registered, no worker spawned. NOTHING from enqueue time is trusted at dequeue except the spec string and flags: bead bodies, file scopes, and locks are all re-resolved fresh when the entry dequeues (see Step 4 queue scan). Without `--queue`, behavior is unchanged — HARD reject verbatim as above. Entry schema + atomic-write discipline: REFERENCE.md `## falcon-queue.yaml Schema (v7.6.0)`. The queue is cross-session by design (it complements the cross-session lock registry; a session-scoped queue would orphan entries when the enqueuing session ends), so any steering session that releases a lock scans it.
+
 7. On no overlap → register new dispatch in the CURRENT session's JSON file by appending to `falcon_dispatches[]` (create the field if it doesn't exist) — see schema in [`REFERENCE.md`](./REFERENCE.md#session-json-schema-extension).
 
 8. Proceed to Step 2 (Emit Prompt).
@@ -121,6 +147,7 @@ Before writing the dispatch file, check the lock registry:
 1. Write a per-dispatch YAML file at `.claude/tmp/falcon-dispatch-<6hex>.yaml` containing:
    - `dispatch_id`, `bead_ids[]`, `branch`, `repo_path`, `file_scope` (from Step 1, optionally expanded in Step 1b)
    - `worker_model` + `worker_thinking_mode` (v7.4.0+): the values accepted at the Step 1 model/thinking proposal surface (default `inherit` for both). Consumed by the `--bg` launch wiring below; recorded so crons, `/falcon status`, and `/wrapup` can read what the worker is running (`--bg`) — or what was requested-but-advisory (`via-paste`/`paste`; cross-check `worker_dispatch_mode` before treating these as ground truth).
+   - `worker_model_rationale` (v7.5.0+): one-line rationale recorded when the model was resolved via `--model auto` (either the matched `model_defaults` key or the bead-evaluated reasoning). `null` for `inherit` and explicit `<model-id>` dispatches.
    - `session_status: active` — set by steering; worker checks on resume prompts; transitions: `active → amendments_pending → complete` (steering sets complete via `/falcon release`)
    - `required_context[]` (v7.2.0+): union of `.claude/*.md` file paths from each bead's `## Required Context` section. Populate via:
 
@@ -191,7 +218,7 @@ When the effective mode is `--bg` (either default or explicit), after Step 1c (l
    - `worker_model: inherit` → OMIT the `--model` flag entirely (worker gets the environment default — identical to pre-v7.4.0 behavior). Any other value → append `--model <value>` verbatim.
    - `worker_thinking_mode: inherit` → OMIT the env prefix. Otherwise prefix the invocation with `MAX_THINKING_TOKENS=<budget>` using the mapping: `none` → `0`, `think` → `10000`, `ultrathink` → `31999`. The env var applies session-wide to the worker — every turn of its lifecycle, unlike a prompt keyword which only influences the turn that carries it. This is why the mechanism is the env var and NOT an `ultrathink` keyword prepended to the bootstrap (see REFERENCE.md `### Thinking-mode delivery — why not a bootstrap keyword`).
    - Both `inherit` → the invocation is byte-identical to pre-v7.4.0 dispatches. A dispatch file missing either field (pre-v7.4.0 dispatches, continuation recovery) is treated as `inherit` — no migration needed.
-   - `/falcon respawn-fresh` successors reuse the dispatch file's recorded values at respawn launch (a per-respawn `--model` override is fdev-334, not yet shipped).
+   - `/falcon respawn-fresh` successors use the dispatch file's recorded values at respawn launch. As of v7.5.0 the operator can override per respawn via `respawn-fresh --model <model-id>` / `--thinking <mode>` — the override is written to the dispatch file BEFORE relaunch, so the recorded values stay authoritative (see `### /falcon respawn-fresh <dispatch-id>` below).
 
    **Session-name prefix (v7.0.1, fdev-lbq.17):** `<prefix>` is the bd project prefix detected via `bd config get database.prefix` (or equivalent inspection of `.beads/`). Falls back to bare `falcon-<dispatch-id>` if no bd workspace is detected (operator using falcon outside a bd-managed project). Rationale: when multiple projects operate concurrently, `claude agents` rows look like `fdev-falcon-a3f8e9`, `myapp-falcon-b27c41` — project sorts first, so all dispatches within a project cluster together visually. Complements `claude agents --cwd <path>` (v2.1.141+) which provides per-directory filtering at the CLI level.
 
@@ -215,7 +242,7 @@ When the effective mode is `--bg` (either default or explicit), after Step 1c (l
 
    Steering does NOT auto-open `claude agents` (could steal terminal focus); user opens it themselves in any terminal.
 
-**Worktree isolation handling — the `.claude/tmp/` shared-path concern:** when the worker runs in an isolated worktree (under `.claude/worktrees/<id>/`), the worktree branch does NOT contain `.claude/tmp/` (it's an ephemeral directory in the main checkout, not committed). The worker MUST resolve dispatch-file paths via the dispatch file's `repo_path` field (absolute path to the main checkout), NOT via a relative `.claude/tmp/` reference. The bootstrap-prompt template (REFERENCE.md `### Bootstrap Prompt Template (v7.0.0)`) enforces this by including `repo_path` literally in its content. See Worker Lifecycle Step 1 (branch verify) below for the worker-side handling.
+**Worktree isolation handling — the `.claude/tmp/` shared-path concern:** when the worker runs in an isolated worktree (under `.claude/worktrees/<id>/`), the worktree branch does NOT contain `.claude/tmp/` (it's an ephemeral directory in the main checkout, not committed). The worker MUST resolve dispatch-file paths via the dispatch file's `repo_path` field (absolute path to the main checkout), NOT via a relative `.claude/tmp/` reference. The bootstrap-prompt template (REFERENCE.md `### Bootstrap Prompt Template (v7.0.0)`) enforces this by including `repo_path` literally in its content. See Worker Lifecycle Step 1 (branch verify) below for the worker-side handling, including the edit-root rule (v7.6.0+) governing which paths resolve via `repo_path` vs the worker's own checkout root.
 
 **Amendment-propagation latency note:** in `--via-paste` mode, the worker-cron fires every 3 min to check for amendments. In `--bg` mode without a worker-cron, the worker only picks up amendments when it actively reads the dispatch file (next active turn — typically triggered by a user peek/reply, an autopilot cron's STATUS UPDATE, or the worker's own self-poll if it's mid-execution). This is NOT a regression from current UX (the `--via-paste` user had to wait for the worker tab to poll), but the cadence is event-driven rather than predictable. For long-running autopilot dispatches with no other activity, consider pinning the agent-view row (`Ctrl+T`) to keep the worker process alive past the ~1hr supervisor-stop window.
 
@@ -492,6 +519,27 @@ The cron self-cancels on terminal state (`session_status: complete`). Manual tea
 
 **Phase-active windows (v7.1.0 LIVE, fdev-lbq.29):** `--auto-ack` peaks at fast cadence (× 0.5 bucket) in the `intent_confirm` phase; is slow (× 2) in `pre_intent`; and ACTIVELY self-cancels (CronDelete by the Phase Transition Handler) when transitioning to `implementation` (intent_acknowledged_utc is non-null). The Step 0 adaptive-cadence guard remains as redundant safety, but the canonical owner of the self-cancel transition is the Phase Transition Handler. See `### Phase Transition Handler (v7.1.0 LIVE)` for the multiplier table and re-arm sequence.
 
+### Intent-gate model escalation (v7.5.0)
+
+The intent confirmation is the cheapest quality signal in the dispatch lifecycle: a poor intent often means the model tier is insufficient for the bead, not that the bead is wrong. Before v7.5.0 the intent gate offered ack / amend / halt — no escalation path. This section adds one: steering kills the worker and respawns it on a stronger model, paying the respawn cost at intent time — BEFORE any state change (no claim, no commits, no bd writes) — instead of discovering tier insufficiency at completion review.
+
+**Orchestrator-owns-model invariant (restated at the gate):** the orchestrator owns model selection absolutely — the escalated model is resolved by steering before the successor worker inits, and the worker NEVER proposes its own tier. A worker emitting "this bead needs a stronger model than me" in its intent is signal the operator may weigh, but the selection decision and the respawn action are steering's alone. Session-boundary principle holds: the escalation respawn is a fresh session — no worker ever switches models mid-session.
+
+**Manual path (intent-response verb):** when reviewing a worker's INTENT block, the operator may respond `escalate <dispatch-id> [--model <model-id>]` (see COMMANDS.md `### escalate`) instead of `proceed <dispatch-id>`. Steering then:
+
+1. Resolves the target model: explicit `--model <id>` wins; otherwise the next entry above the current `worker_model` in the project's `escalation_ladder` (falcon-autopilot.md; see AUTOPILOT-RULES.md `## 8.`). No ladder configured AND no explicit `--model` → refuse with a one-line hint (name a model or configure the ladder).
+2. Appends an entry to the dispatch file's `escalations[]` (from_model, to_model, rationale, source: `operator`, escalated_utc — see REFERENCE.md schema).
+3. Executes the `/falcon respawn-fresh <dispatch-id> --model <target>` flow (same dispatch-id; reason code `manual-replace` — the `escalations[]` entry carries the escalation semantics, so the five canonical reason codes stay stable). The override is written to `worker_model` BEFORE relaunch per the respawn-fresh step 5 ordering.
+4. **Lock continuity (verify-and-document, no release/re-acquire):** file-scope locks belong to the DISPATCH, and the dispatch-id survives the respawn — the lock registry entry is untouched. Steering verifies the registry still names this dispatch-id after the respawn and notes it in the escalation record; there is no release/re-acquire flow.
+
+The successor worker enters via the normal continuation bootstrap, re-derives context, and emits a fresh INTENT for the same bead set on the stronger model.
+
+**Autopilot path (`--auto-ack` predicate failure):** when the `SAFE_TO_ACK_INTENT` predicate FAILS, the cron MAY select escalation instead of its defer-with-note default, ONLY when BOTH hold: the project's `escalation_ladder` is configured (uncommented in falcon-autopilot.md) AND escalation budget remains. Absent policy — no ladder, or budget exhausted — the cron defers/halts exactly as today (unchanged default). An auto-escalation records `source: auto-ack-cron` in the `escalations[]` entry and emits a one-line `STATE: ESCALATED dispatch=<id> <from> -> <to> (<n>/<budget>)` notification.
+
+**Escalation budget:** `escalation_budget` (falcon-autopilot.md `## 8.`, default **1 per dispatch**) caps escalations across BOTH paths' auto-consumption accounting, mirroring `amendment_budget_defaults` in shape. It is a SEPARATE budget from the amendment budget — escalation spends at the pre-state-change phase (intent gate), amendments spend post-completion; one never decrements the other, and exhausting one leaves the other untouched. Operator-initiated `escalate` past the budget is allowed with an explicit confirmation (the budget is an autopilot guardrail, not an operator straitjacket); auto-ack-cron escalation past the budget is never allowed.
+
+**Audit surfaces:** every escalation lands in `escalations[]` (dispatch file), is shown by `/falcon status` and `/falcon list-pending` (escalation count/budget per dispatch), and surfaces in the dispatch report's `decisions_for_human[]` as an escalation audit entry (from/to/rationale — see REFERENCE.md Worker Return Contract notes) so `/wrapup` and `/falcon retro` can correlate model-tier insufficiency with bead shape.
+
 ### --auto-amend mode + --amendment-budget HALT (v6.10.0)
 
 When `--auto-amend` is set, after Step 1c (lock-registry check) and Step 2 (dispatch file write), steering arms a steering-side cron via `CronCreate` that evaluates the `SAFE_TO_AMEND` whitelist against gaps surfaced from the dispatch's Step 3 validation + Step 3b cognitive audit. On whitelist match, the cron auto-issues an amendment to the dispatch file's `amendments[]` array (`issued_by: steering-cron`, `label: auto-issued:cron`) and emits a `check amendments <dispatch-id>` block inline for the worker to pick up.
@@ -602,6 +650,8 @@ Use when previewing autopilot effects on a bead you're not sure is well-scoped, 
 ## Step 3 — Receive and Validate Worker Report
 
 When the user signals worker completion (typically by pasting the worker's short "Work stream completed at `<UTC ISO8601>`. Re-read `<dispatch-file>`." message), read the dispatch file's `implementation_results` section.
+
+**Awake-supersedes-cadence (v7.7.0, wake-opportunism):** when steering is awake with dispatch state in hand — operator present, any cron fire, monitor event — review/ack/validate immediately rather than deferring to the responsible cron's next scheduled fire. Cron cadence is the unattended-latency floor, not a ceiling; the manual path always supersedes. This applies to every pending-state kind a wake surfaces (unacked intent, completed-unvalidated results, terminal states needing release), not just completion signals. Full convention, incident provenance, and telemetry attribution: CRONS.md `### Wake-opportunism convention (v7.7.0)`.
 
 **Content-hash verification (before parsing results):** compute `sha256(implementation_results_content)` and compare to `implementation_results_hash` in the dispatch file. If they do not match — or if `implementation_results_hash` is null — the worker may have crashed mid-write or updated the results without updating the hash. Treat as a partial report and prompt the user to investigate before proceeding.
 
@@ -722,13 +772,15 @@ When the lock is held, surface the reason to the user (single line: "Lock held: 
 
 **Manual release escape hatch:** `/falcon release <dispatch-id>` is available for cases where the auto-release path declined and steering wants to override.
 
+**Queue scan on release (v7.6.0+):** immediately after ANY lock release — the Step 4 auto-release path above AND the manual `/falcon release` path (Step 5) — scan `.claude/tmp/falcon-queue.yaml` (absent file = empty queue, nothing to do). Walk entries FIFO, eldest `enqueued_utc` first. For each entry, re-run the FULL pre-dispatch sequence from the entry's spec string as if the operator had just typed the command: Step 1 bead-set resolution, Step 1b pre-intent grep audit (when applicable), Step 1c lock check, and mode detection. Nothing recorded at enqueue time is trusted except the spec and flags — bead bodies, derived file scopes, and active locks are all re-resolved fresh here. The FIRST entry whose re-derived scope no longer conflicts dequeues: remove it from falcon-queue.yaml (atomic read-modify-write per REFERENCE.md `## falcon-queue.yaml Schema (v7.6.0)`) and proceed through Step 2 onward with the entry's flags preserved verbatim (`--sequential`, `--autopilot`, `--model`, budgets). On re-conflict, leave the entry queued at its original position and evaluate the next. At most ONE entry dequeues per release event. There is NO extra dequeue confirmation beyond the dequeued mode's own gates — manual dispatches still pause at intent-confirm; autopilot dispatches are governed by `.claude/rules/falcon-autopilot.md`. Entries are never auto-expired; `/falcon list-pending` flags entries older than 24h as STALE, and `/falcon dequeue <queue-id>` cancels one manually.
+
 Acknowledge to the user: `Report N stashed. M beads closed, K discovered, L blockers, D decisions (H high-stakes / L low-stakes), O out-of-band closures pending. Lock released for <files/dirs>. Dispatch another or run /wrapup.`
 
 ---
 
 ## Step 5 — Stale Lock Cleanup (manual)
 
-**Single dispatch:** `/falcon release <dispatch-id>` — same implementation as Step 4 auto-release.
+**Single dispatch:** `/falcon release <dispatch-id>` — same implementation as Step 4 auto-release (including the v7.6.0 queue scan after the lock clears).
 
 **Whole session:** `/falcon release-session <session-id>` — bulk release. Use when a whole worker session died and held multiple dispatches.
 
@@ -992,9 +1044,11 @@ Implementation:
 
 **Compatible with `/falcon create-rules --force`** — if the user re-runs create-rules with `--force` after enabling autopilot, the existing activations are CLOBBERED by the fresh template. They'd need to re-run `/falcon enable-autopilot --profile=<name>` to re-activate. This is correct behavior (create-rules is the reset path).
 
-### /falcon respawn-fresh <dispatch-id> [--reason=<reason>] [--force]
+### /falcon respawn-fresh <dispatch-id> [--reason=<reason>] [--force] [--model <model-id>] [--thinking <mode>]
 
 **v7.0.0+ sub-command.** Spawn a FRESH `--bg` worker that continues an existing dispatch where the prior worker died. The new worker picks up via the three-step recovery sequence (push unpushed commits → close landed-but-bd-open beads → reconcile in-progress amendments) before resuming normal lifecycle. Forensic record of replaced workers persists in `worker_bg_prior_sessions[]`.
+
+**v7.5.0:** `--model` / `--thinking` override the recorded `worker_model` / `worker_thinking_mode` for the successor — operator-prompted only, never automatic. The respawn is a fresh session, so the override respects the session-boundary principle (a worker never switches models mid-session) and the orchestrator-owns-model invariant (the model is resolved before worker init; the worker has no self-selection role). See step 5 below for the write-before-relaunch ordering.
 
 Implementation:
 
@@ -1003,6 +1057,7 @@ Implementation:
    - Refuse if `session_status: complete` — the dispatch is finished; respawn doesn't make sense. Suggest `/falcon release <id>` for cleanup or `/falcon work beads <bead-ids> --bg` for a fresh dispatch.
    - Refuse if `worker_dispatch_mode != "bg"` — respawn-fresh only applies to background-session dispatches. Suggest manually re-pasting the dispatch prompt for `--via-paste` workers OR re-spawning `--paste` workers via the original mechanism.
    - Validate `--reason=<code>` if provided; accept any of the five canonical codes (`context-exhausted`, `safety-tripped`, `stuck-looping`, `manual-replace`, `crashed`). Omitted → default to `manual-replace`.
+   - **(v7.5.0)** Validate `--thinking <mode>` if provided: must be one of `none | think | ultrathink | inherit`. `--model <model-id>` accepts any value `claude --model` accepts, or `inherit` (resets to the inherit default). Refuse on an invalid `--thinking` value before any state change.
 
 2. **Append prior session to forensic record.**
 
@@ -1026,7 +1081,11 @@ Implementation:
 
    Atomic write. The successor worker's bootstrap reads this field to detect continuation mode and execute the three-step recovery sequence (see PROTOCOL.md `### --bg dispatch mode (v7.0.0)` for the bootstrap's continuation branch).
 
-5. **Spawn the successor.**
+5. **Apply per-respawn model/thinking overrides (v7.5.0).**
+
+   If `--model` and/or `--thinking` was passed (validated at step 1), atomically write the new value(s) to the dispatch file's `worker_model` / `worker_thinking_mode` BEFORE the relaunch. The ordering is load-bearing: the dispatch file's recorded values are the single source of truth the launch reads — overrides flow through the same v7.4.0 injection wiring unchanged, and any LATER respawn (no flags) reuses the updated values rather than silently reverting to the original dispatch's choice. No flags passed → no write; recorded values stand.
+
+6. **Spawn the successor.**
 
    Invoke via Bash:
 
@@ -1034,13 +1093,13 @@ Implementation:
    [MAX_THINKING_TOKENS=<budget>] claude --bg [--model <model-id>] --name "<prefix>-falcon-<dispatch-id>-r<N>" "<bootstrap from REFERENCE.md template>"
    ```
 
-   Inherit the same worktree-isolation flag the original dispatch used (read from `worker_bg_isolation`; respect the same default-fallback chain). Reuse the dispatch file's recorded `worker_model` + `worker_thinking_mode` for the bracketed injections, with the same `inherit`-omits rules as the initial launch (v7.4.0; per-respawn override is fdev-334, future). The bootstrap substitutes `dispatch_id` + `repo_path` (same template as initial dispatch).
+   Inherit the same worktree-isolation flag the original dispatch used (read from `worker_bg_isolation`; respect the same default-fallback chain). Use the dispatch file's recorded `worker_model` + `worker_thinking_mode` for the bracketed injections — as just updated by step 5 when overrides were given — with the same `inherit`-omits rules as the initial launch (v7.4.0). The bootstrap substitutes `dispatch_id` + `repo_path` (same template as initial dispatch).
 
-6. **Capture new session ID; update `worker_bg_session_id`.**
+7. **Capture new session ID; update `worker_bg_session_id`.**
 
    Atomic write to the dispatch file (preserve all other fields). The `worker_bg_session_id` field is the source of truth for "the current worker"; consumers (`claude attach`, `claude logs`, `/falcon status`, etc.) read this field.
 
-7. **Confirmation-gated `claude stop` (per quartermaster R1).**
+8. **Confirmation-gated `claude stop` (per quartermaster R1).**
 
    Print the suggested `claude stop <old-id>` command. Unless `--force` was passed, prompt:
 
@@ -1055,12 +1114,13 @@ Implementation:
 
    This prompt is the user's last chance to record notes before the prior session's state is cleared. Particularly important for `reason: context-exhausted` and `reason: stuck-looping` where the prior session may still be alive and making slow progress.
 
-8. **Print summary.**
+9. **Print summary.**
 
    ```
    Respawned dispatch <id> as session <new-short-id> (generation: <N>).
 
    Prior session:     <old-id> (reason: <reason>)
+   Model/thinking:    <worker_model> / <worker_thinking_mode> (overridden this respawn | recorded values reused)
    New session name:  falcon-<dispatch-id>-r<N> (look for this row in `claude agents`)
    Worktree:          <isolated under .claude/worktrees/<id>/ | shared with main checkout>
    Continuation mode: dispatch_continuation: true set; successor will execute
@@ -1248,9 +1308,13 @@ Use paste mode as a fallback, not a default.
 
 **Canonical reference (v6.7.0+):** as of falcon v6.7.0 the default `init_prompt` template no longer embeds this lifecycle verbatim — it points workers here. This section IS the binding spec for workers under the default + `--sequential` + `--skip-intent` + `--inline-beads` modes. Only the `--paste` mode init_prompt inlines this section directly (since paste-mode workers cannot Read filesystem files). See REFERENCE.md "## init_prompt Content Template (default: thin / pointer-style)".
 
-1. Branch verify: `git fetch origin && git checkout <branch> && git rev-parse --abbrev-ref HEAD` (MUST return the declared branch name — stop on mismatch)
+1. Branch verify: `git fetch origin && git checkout <branch> && git rev-parse --abbrev-ref HEAD` (MUST return the declared branch name — stop on mismatch). This checkout path applies to non-isolated workers sharing the main checkout.
+
+   **Worktree-mode branch verify (v7.6.0+):** detect isolation first — the worker is in a worktree when `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`, or equivalently when the cwd sits under `.claude/worktrees/`. In a worktree the checkout above is UNSATISFIABLE as written: git refuses to check out a branch already held by another worktree, and steering ALWAYS holds the dispatch branch in the main checkout. Verify by ancestry instead: `git merge-base --is-ancestor origin/<branch> HEAD` MUST succeed — the worktree's auto-created branch (e.g. `worktree-falcon-<id>`) must be based at the dispatch branch tip. If a FRESH worktree (no commits of its own yet) was created from a different base such as the default branch, re-base it with `git reset --hard origin/<branch>` and re-verify; if ancestry still fails, that is the worktree-mode mismatch — hard-stop exactly as the checkout path does. Record the ACTUAL branch name (`git rev-parse --abbrev-ref HEAD`) for the report so steering can attribute commits. The push contract changes too — see Step 9.
 
    **`--bg` mode + worktree isolation (v7.0.0+):** if the worker is running in a Claude Code worktree (under `.claude/worktrees/<id>/`), the worktree branch does NOT contain `.claude/tmp/` (it's an ephemeral directory in the main checkout). The worker MUST resolve dispatch-file paths via the dispatch file's `repo_path` field (absolute path to the main checkout), NOT via a relative `.claude/tmp/` reference. The bootstrap prompt provides `repo_path` literally. Read the dispatch file at `<repo_path>/.claude/tmp/falcon-dispatch-<dispatch-id>.yaml`; verify the loaded file's `dispatch_id` matches the bootstrap-provided ID before any state change (cheap mitigation for the residual concern that steering code logic could pass a wrong ID).
+
+   **Edit-root rule (v7.6.0+):** `repo_path` resolves dispatch-file paths ONLY (`<repo_path>/.claude/tmp/*`) — that coordination state is ephemeral, uncommitted, and exists solely in the main checkout, so the worktree cannot see it. ALL work-product paths from bead bodies (repo-relative: source files, skill docs, `.beads/issues.jsonl`) MUST resolve against the WORKER's own checkout root — `git rev-parse --show-toplevel` from the worker's cwd — never against `repo_path`, because writing work product through `repo_path` mutates the steering checkout and defeats the isolation (observed in field deployment: a worker's first edit targeted the main checkout, errored, and burned a turn self-correcting).
 
    **`/rename` for session identity (v7.0.0+; canonical mechanism for `--via-paste` and `--paste` modes):** as the first action after branch verify, run the `/rename falcon-<dispatch-id>` slash command so the session shows up correctly in `claude agents` (when available) and on the prompt bar. This replaces the prior tmux/printf/IDE-bullet terminal-title approach (which silently failed across most real-world setups — see P5.1 in the v7.0.0 changelog for the failure-mode catalog). `--bg` mode does NOT need this step because `claude --bg --name "falcon-<dispatch-id>"` already sets the session name at spawn time.
 
@@ -1277,6 +1341,8 @@ Use paste mode as a fallback, not a default.
 7. If any bead names out-of-band or encapsulator verification: do NOT execute the check yourself — set `verification.out_of_band_required: true` in the report and leave the bead `in_progress`.
 8. Commit atomically with `Closes: <id>` in messages. Stage `.beads/issues.jsonl` alongside code (flush via `bd export -o .beads/issues.jsonl` after batch writes).
 9. Push the feature branch with `git push` (do NOT open a PR — that stays with the steering session).
+
+   **Worktree-mode push (v7.6.0+):** from an isolated worktree, plain `git push` publishes the auto-created worktree branch (e.g. `worktree-falcon-<id>`) — NOT the dispatch branch — leaving steering to hand-land the commits. Land directly on the branch ref instead: `git pull --rebase origin <branch> && git push origin HEAD:<branch>` (never `git checkout <branch>` to push — the main checkout holds it). **Steering-side fallback landing (dead worker):** if a worker dies with commits stranded on its worktree branch, steering lands them from the main checkout with `git merge --ff-only <worktree-branch>` on the dispatch branch, then cleans up the worktree: `git worktree remove <worktree-path>` + `git branch -d <worktree-branch>`.
 10. `bd close <id>` only after Step 6 verification produced observable evidence.
 11. Write `implementation_results` to the dispatch file. Compute `sha256(implementation_results_content)` and write to `implementation_results_hash` in the same atomic write.
 12. Emit the completion preamble wrapped in the v6.5.3 labeled-copy convention.
@@ -1292,7 +1358,7 @@ For each bead in `bead_ids[]` (in array order):
   b. Implement per the bead's description. Inherit context naturally from prior bead(s).
   c. Verify per the bead's Testing Strategy + project verification-gate rules (CLOSE gate).
   d. Commit atomically with `Closes: <id>` in the message — one commit per bead.
-  e. Push (`git pull --rebase origin <branch>` first if not already current).
+  e. Push (`git pull --rebase origin <branch>` first if not already current; worktree-mode workers land on the branch ref per Step 9's worktree push contract: `git push origin HEAD:<branch>`).
   f. `bd close <id>` only after step c produced observable evidence.
   g. Populate per-bead entry in `implementation_results.beads[]`.
   h. Move to next bead.

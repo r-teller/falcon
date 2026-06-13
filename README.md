@@ -2,17 +2,47 @@
 
 Falcon is a [Claude Code](https://claude.com/claude-code) skill that ships a self-contained prompt to a **different agent session** for autonomous work, then returns a structured report the steering session uses to update its changelog and handoff state. It's designed for projects that track work as discrete units (issues, beads, tickets) and want to maximize context budget by offloading per-unit execution to worker sessions.
 
-**Current version:** see [`SKILL.md`](.claude/skills/falcon/SKILL.md) `version:` frontmatter.
+**Current version:** the latest [release tag](https://github.com/r-teller/falcon/releases) (`git tag` in a clone). Individual components (falcon skill, `/leroy`, `/wrapup`, agents) carry their own `version:` frontmatter and changelogs.
+
+## Contents
+
+- [What it does](#what-it-does)
+- [When to use](#when-to-use) · [When NOT to use](#when-not-to-use) · [What's NOT for you](#whats-not-for-you)
+- [What this costs](#what-this-costs)
+- [Installation](#installation)
+- [Advisor cluster](#advisor-cluster)
+- [Bootstrap a new project from your PRD](#bootstrap-a-new-project-from-your-prd)
+- [First-run setup](#first-run-setup-optional-recommended-for-autopilot-use)
+- [Quick start: manual dispatch](#quick-start-manual-dispatch) · [Quick start: autopilot](#quick-start-autopilot--afk-mode)
+- [Flags and tiers](#flags-and-tiers)
+- [Project assumptions](#project-assumptions)
+- [Architecture](#architecture)
+- [Contributing](#contributing) · [Backlog](#backlog) · [License](#license)
 
 ## What it does
 
-- **Dispatch:** the steering session writes a per-dispatch YAML file at `.claude/tmp/falcon-dispatch-<6hex>.yaml` and (v7.0.0+ default) spawns a Claude Code background session via `claude --bg --name falcon-<dispatch-id>` that loads it. The worker session reads the dispatch file and executes the full lifecycle (claim → implement → verify → commit → push → close → return report); INTENT and COMPLETION are observable in `claude agents`. Older Claude Code (< 2.1.139) auto-downgrades to `--via-paste` mode — steering emits a paste block, you copy it into a worker tab.
-- **File-scope locking:** cross-session aggregation via session JSON `falcon_dispatches[]` array prevents two workers from claiming the same files. HARD-reject at dispatch time on conflict.
-- **Intent confirmation:** the worker writes a single-paragraph intent at the intent-confirm pause; the steering session acks before any state change. Cheapest catch for "worker misread the bead."
-- **Amendments:** post-completion follow-up instructions from steering land in the dispatch file's `amendments[]` array; the worker re-reads, executes, writes back. No re-dispatch overhead for gap-closing.
-- **Autopilot (v6.8.0+):** five-phase cron-driven automation rollout — `--watch` (observation), `--auto-ack` (intent gate eval), `--auto-amend` (whitelist-driven amendment issuance with budget HALT), `--worker-cron` (worker-side amendment pickup), `--release-on-merge` (lock held until PR merge), `--advisor=<agent>` (fork ambiguous decisions to a registered skill). The `--autopilot` macro bundles four of these for full bidirectional AFK operation.
-- **Return-to-AFK utility:** `/falcon list-pending` surfaces every pending-human item across all active dispatches in one read-only command; the `--watch` cron prepends `⚠️ HIGH-STAKES DAR PENDING` headlines so DARs can't get lost in routine status emissions.
-- **Forecast vs Actual calibration loop:** bead authors forecast effort per phase at `triage:ready` time (5 phases: plan / discover / implement / test / fix); `.claude/scripts/token-tracking.sh` captures actuals per phase per session; `/wrapup` Task 3c flushes to `.claude/metrics.jsonl`. `velocity-report.py` produces a self-contained HTML dashboard. Per-bead, per-cynefin, per-size variance is queryable via `jq` against the JSONL (recipes in [`metrics-schema.md`](.claude/docs/metrics-schema.md)). Closes the loop: forecast → claim → track → close → metric → calibrate → refine forecasts.
+**Dispatch.** The steering session writes a per-dispatch YAML file at `.claude/tmp/falcon-dispatch-<6hex>.yaml` and (v7.0.0+ default) spawns a Claude Code background session via `claude --bg --name falcon-<dispatch-id>` that loads it. The worker session reads the dispatch file and executes the full lifecycle (claim → implement → verify → commit → push → close → return report); INTENT and COMPLETION are observable in `claude agents`. Older Claude Code (< 2.1.139) auto-downgrades to `--via-paste` mode — steering emits a paste block, you copy it into a worker tab.
+
+**File-scope locking.** Cross-session aggregation via the session JSON `falcon_dispatches[]` array prevents two workers from claiming the same files. HARD-reject at dispatch time on conflict.
+
+**Intent confirmation.** The worker writes a single-paragraph intent at the intent-confirm pause; the steering session acks before any state change. Cheapest catch for "worker misread the bead."
+
+**Amendments.** Post-completion follow-up instructions from steering land in the dispatch file's `amendments[]` array; the worker re-reads, executes, writes back. No re-dispatch overhead for gap-closing.
+
+**Autopilot (v6.8.0+).** Five-phase cron-driven automation rollout:
+
+- `--watch` — observation
+- `--auto-ack` — intent gate eval
+- `--auto-amend` — whitelist-driven amendment issuance with budget HALT
+- `--worker-cron` — worker-side amendment pickup
+- `--release-on-merge` — lock held until PR merge
+- `--advisor=<agent>` — fork ambiguous decisions to a registered skill
+
+The `--autopilot` macro bundles four of these for full bidirectional AFK operation.
+
+**Return-to-AFK utility.** `/falcon list-pending` surfaces every pending-human item across all active dispatches in one read-only command; the `--watch` cron prepends `⚠️ HIGH-STAKES DAR PENDING` headlines so DARs can't get lost in routine status emissions.
+
+**Forecast vs Actual calibration loop.** Bead authors forecast effort per phase at `triage:ready` time (5 phases: plan / discover / implement / test / fix); `.claude/scripts/token-tracking.sh` captures actuals per phase per session; `/wrapup` Task 3c flushes to `.claude/metrics.jsonl`. `velocity-report.py` produces a self-contained HTML dashboard. Per-bead, per-cynefin, per-size variance is queryable via `jq` against the JSONL (recipes in [`metrics-schema.md`](.claude/docs/metrics-schema.md)). Closes the loop: forecast → claim → track → close → metric → calibrate → refine forecasts.
 
 ## When to use
 
@@ -63,19 +93,21 @@ A typical full session (`/leroy` → work → `/wrapup`) at the kit-level cost (
 
 Beyond the falcon skill itself, this repo ships a coordinated set of pieces that make the Bootstrap workflow + `/leroy` + `/wrapup` work out of the box:
 
-- **`.claude/skills/falcon/`** (5 files) — falcon itself
-- **`.claude/skills/{quartermaster,herald,scribe}/`** + **`.claude/agents/{quartermaster,herald,scribe,navigator}/`** — vendored advisor cluster (3 dispatcher skills + 13 specialist agents) + navigator subagent
-- **`.claude/commands/{leroy,wrapup}.md`** — session-startup + session-end slash commands (current: leroy v2.9.0, wrapup v2.13.2)
-- **`.claude/docs/`** — schema references (handoff, changelog, work-item-templates, **enhancements**, **standards-history**, **lint-integration**)
-- **`.claude/rules/`** — workflow modules + `development-standards.md` template stub
-- **`.claude/hooks/`** — Claude Code auto-invoked scripts: `session-start.sh` (injects session_id + transcript_path into context), `statusline.sh` (status-line refresh)
-- **`.claude/scripts/`** — workflow/user/CI utility scripts: `check-bead-contract.py` (bead tier-contract enforcement — see [`lint-integration.md`](.claude/docs/lint-integration.md)), `token-tracking.sh` (5-phase forecast-vs-actual capture), `velocity-report.py` (HTML velocity report from metrics.jsonl)
-- **`.claude/schemas/`** — JSON Schema validators for the 5 typed YAML/JSONL artifacts (handoff, changelog, enhancements, standards-history, metrics) — each YAML file carries a `# yaml-language-server: $schema=...` header for editor live-validation
-- **`.claude/{architecture,backend,frontend,data-model,security,tests,claude}.md`** — context-file stubs (asteroid-themed; hydrate via the [Bootstrap section](#bootstrap-a-new-project-from-your-prd) below)
-- **`.claude/{handoff,changelog}.yaml`** — session-state file stubs with `template_entry:` + a commented-out worked example
-- **`.claude/{enhancements,standards-history}.yaml`** — typed audit logs: `enhancements.yaml` for doc gaps / retros / standards candidates; `standards-history.yaml` for rule firings / promoted rules with slug-keyed identity
-- **`.claude/metrics.jsonl`** — append-only forecast-vs-actual log (committed by default for team-shared calibration; can be gitignored — see `.gitignore`)
-- **`.claude/settings.json`** — kit-shipped settings: `statusLine` config + `SessionStart` hook registration. Users can override per-machine via `settings.local.json` (gitignored)
+| Path | What it is |
+|---|---|
+| `.claude/skills/falcon/` | Falcon itself (5 files) |
+| `.claude/skills/{quartermaster,herald,scribe}/` + `.claude/agents/{quartermaster,herald,scribe,navigator}/` | Vendored advisor cluster (3 dispatcher skills + 13 specialist agents) + navigator subagent |
+| `.claude/commands/{leroy,wrapup}.md` | Session-startup + session-end slash commands (current: leroy v2.9.0, wrapup v2.13.2) |
+| `.claude/docs/` | Schema references (handoff, changelog, work-item-templates, enhancements, standards-history, lint-integration) |
+| `.claude/rules/` | Workflow modules + `development-standards.md` template stub |
+| `.claude/hooks/` | Claude Code auto-invoked scripts: `session-start.sh` (injects session_id + transcript_path into context), `statusline.sh` (status-line refresh) |
+| `.claude/scripts/` | Workflow/user/CI utility scripts: `check-bead-contract.py` (bead tier-contract enforcement — see [`lint-integration.md`](.claude/docs/lint-integration.md)), `token-tracking.sh` (5-phase forecast-vs-actual capture), `velocity-report.py` (HTML velocity report from metrics.jsonl) |
+| `.claude/schemas/` | JSON Schema validators for the 5 typed YAML/JSONL artifacts (handoff, changelog, enhancements, standards-history, metrics); each YAML file carries a `# yaml-language-server: $schema=...` header for editor live-validation |
+| `.claude/{architecture,backend,frontend,data-model,security,tests,claude}.md` | Context-file stubs (asteroid-themed; hydrate via the [Bootstrap section](#bootstrap-a-new-project-from-your-prd) below) |
+| `.claude/{handoff,changelog}.yaml` | Session-state file stubs with `template_entry:` + a commented-out worked example |
+| `.claude/{enhancements,standards-history}.yaml` | Typed audit logs: `enhancements.yaml` for doc gaps / retros / standards candidates; `standards-history.yaml` for rule firings / promoted rules with slug-keyed identity |
+| `.claude/metrics.jsonl` | Append-only forecast-vs-actual log (committed by default for team-shared calibration; can be gitignored — see `.gitignore`) |
+| `.claude/settings.json` | Kit-shipped settings: `statusLine` config + `SessionStart` hook registration; override per-machine via `settings.local.json` (gitignored) |
 
 ### Option 1 — Full distribution (recommended)
 
@@ -84,6 +116,7 @@ Copy everything under `.claude/`. Gives you `/leroy`, `/falcon`, `/wrapup`, the 
 ```bash
 git clone https://github.com/r-teller/falcon /tmp/falcon
 cp -r /tmp/falcon/.claude /path/to/your/project/
+cp /tmp/falcon/BOOTSTRAP.md /path/to/your/project/   # one-time bootstrap prompt; delete after first run if you like
 ```
 
 ### Option 2 — Falcon skill only (minimal)
@@ -140,178 +173,18 @@ To wire them as falcon advisors, configure `.claude/rules/falcon-autopilot.md §
 
 Goal: from a PRD to a session where you can run `/leroy`, `bd ready`, and `/falcon work beads <id>` against real work.
 
-The `.claude/{architecture,backend,frontend,data-model,security,tests}.md` files (plus `handoff.yaml` and `changelog.yaml`) ship pre-populated with worked examples for a fictitious "Asteroids: Wave Defense" project. Every example block is wrapped in `<!-- theme example -->...<!-- /theme example -->` markers so a hydration pass can find and replace just the example content while preserving the template structure (section headers, instructional prose, table headers, code-block fences).
-
-Paste the following into a fresh Claude Code session in this repo, with your PRD attached or its path referenced. The prompt walks through 6 steps with confirmation checkpoints.
+The full 6-step bootstrap prompt lives in [`BOOTSTRAP.md`](BOOTSTRAP.md). Use it in a fresh Claude Code session in your project:
 
 ```
-I'm setting up the falcon distribution in a new project. My PRD is @PRD.md
-(or paste it inline below). Walk me through the 6 steps below so I can
-start using /leroy + /falcon + beads. Pause at the indicated checkpoints.
-
----
-
-STEP 1 — Read the PRD and summarize.
-
-Read the PRD fully. Extract:
-- Project name + one-sentence summary
-- Tech stack (backend, frontend, DB, queue, storage, auth)
-- Major subsystems / domains
-- Initial features (will become first-phase beads)
-- Open questions (will become decision/spike beads)
-- Security posture (auth, data sensitivity, project-specific concerns)
-- Testing strategy (philosophy, frameworks, key scenarios)
-
-Present a one-page summary of what you found. Mark anything ambiguous as
-[TODO: fill in]. STOP. Wait for me to confirm or amend before proceeding.
-
----
-
-STEP 2 — Hydrate context files.
-
-For each file below, locate every <!-- theme example -->...<!-- /theme example -->
-block and replace ONLY its contents with PRD-derived values. Keep section
-headers, instructional prose, table headers, code-block fences, and the
-markers themselves untouched.
-
-- .claude/architecture.md  (12 blocks)
-- .claude/backend.md       (4 blocks)
-- .claude/frontend.md      (4 blocks; if no UI, add `> **Not applicable** —`
-                            at the file top + leave `n/a` placeholder lines
-                            inside each block)
-- .claude/data-model.md    (5 blocks; same Not Applicable convention if no DB)
-- .claude/security.md      (6 blocks)
-- .claude/tests.md         (5 blocks)
-- .claude/handoff.yaml     (1 commented example entry between template_entry
-                            and entries: []; re-theme the commented entry to
-                            a plausible first session for my project, OR
-                            delete the <!-- theme example --> block entirely)
-- .claude/changelog.yaml   (same as handoff.yaml)
-
-Constraints:
-1. Preserve every <!-- theme example --> marker — load-bearing for future
-   re-hydration passes.
-2. Use [TODO: fill in] for granular unknowns inside an otherwise-applicable
-   block; use `> **Not applicable** —` for whole sections that don't apply.
-3. handoff.yaml + changelog.yaml example entries MUST remain fully commented
-   (every line starting with `#`) so they don't parse as live data.
-   /wrapup prepends real entries to entries: [] separately.
-4. Leave .claude/docs/, .claude/skills/, .claude/agents/, .claude/commands/,
-   .claude/rules/, .claude/claude.md, README.md, LICENSE, .gitignore alone.
-5. After hydration, grep the 8 target files for:
-       asteroid | wave[-_]pack | wave[-_]spawner | score-tracker |
-       replay-validator | power-up-shop | physics-engine | level-designs
-   Any hits are leaks — flag them.
-
-Show a one-line summary per file. STOP. Wait for me to confirm before
-proceeding to bead creation.
-
----
-
-STEP 3 — Initialize beads.
-
-Run `bd --version`. If missing, tell me to install beads
-(https://github.com/anthropic-experimental/beads) and stop.
-
-Run `ls .beads/`. If absent, run `bd init` (the non-interactive default —
-use this for autonomous/unattended bootstrap runs). Use `bd quickstart`
-only if a human is driving onboarding interactively. Otherwise note that
-beads is already initialized.
-
----
-
-STEP 4 — Create initial beads from the PRD.
-
-Group the PRD's features by the phasing the PRD itself declares. If the
-PRD doesn't phase work explicitly, group into 2-4 logical phases. Create:
-
-1. Epic per phase:
-       bd create "Phase N: <name>" --type epic
-
-2. Child beads per feature in each phase, using the Stub Template from
-   .claude/docs/work-item-templates.md (Summary + Persona + Phase + Rough
-   Size; leave AC + Effort Forecast for /scribe refine later):
-       bd create "<title>" --type feature --parent <epic-id> --add-label triage:backlog
-
-3. Decision beads for each open question. Decision beads need a time-box
-   per the Decision (Spike) Template — either add it via --description at
-   create time, or expect /scribe refine to surface it as a gap:
-       bd create "Decide: <question>" --type decision --add-label triage:triaged \
-                 --description "Time Box: <N> turns / <N> days"
-
-4. Promote Phase 1 stubs from triage:backlog → triage:triaged (ready to be
-   fully spec'd by /scribe refine). Later phases stay triage:backlog.
-
-5. Dependencies — for any feature the PRD indicates is sequenced after
-   another:
-       bd dep add <later-id> <earlier-id> -t blocks
-
-Note on labels: beads created here carry only the `triage:*` label.
-Size/cynefin/layer/persona labels are added by /scribe refine in Step 5
-once each bead has full content (per the Readiness Checklist in
-.claude/docs/work-item-templates.md).
-
-Show a summary table: phase, # beads, triage state. STOP. Wait for me
-to confirm before refining Phase 1.
-
----
-
-STEP 5 — Refine Phase 1 beads to triage:ready (recommended).
-
-For each Phase 1 bead created in Step 4, invoke:
-      /scribe refine <bead-id>
-
-scribe-refine will:
-  - Inline the relevant PRD section into the bead body
-  - Apply the appropriate Small/Medium/Large Feature template from
-    .claude/docs/work-item-templates.md (sized per the bead's Rough Size)
-  - Add Acceptance Criteria (testable checklist with - [ ] items)
-  - Add Effort Forecast (per-phase: plan / implement / test / total +
-    Confidence)
-  - Add Changes Needed (file paths + actions)
-  - Validate against the Readiness Checklist in work-item-templates.md
-  - Promote triage:triaged → triage:ready
-
-After this step, Phase 1 beads are immediately claimable by /falcon work
-beads <id>. Phase 2+ beads STAY at triage:backlog/triaged for just-in-time
-refinement when each later phase starts. This matches scribe-refine's
-design philosophy ("use just-in-time before claim, not en masse") — Phase
-1 qualifies as JIT because it starts now; Phase 2 will not.
-
-If I prefer to refine each Phase 1 bead manually right before claiming
-(no bulk refinement), tell me to skip this step and proceed to Step 6.
-
-Show a summary of which Phase 1 beads landed at triage:ready, and flag
-any that failed the Readiness Checklist. STOP. Wait for me to confirm
-before printing next steps.
-
----
-
-STEP 6 — Print next steps.
-
-Tell me:
-
-1. Run `/leroy` to start the first real session — it reads the freshly-
-   hydrated architecture.md + handoff.yaml for orientation.
-2. Run `bd ready` to see Phase 1 work that's claimable (all at
-   triage:ready after Step 5).
-3. Pick a Phase 1 bead and run `/falcon work beads <bead-id>` to dispatch
-   to a remote worker. (Default mode is --bg on Claude Code 2.1.139+;
-   auto-downgrades to --via-paste otherwise.)
-4. For Phase 2+ work later: when a phase starts, run `/scribe refine
-   <bead-id>` per Phase N bead before claiming. (Just-in-time refinement.)
-5. Run `/wrapup` at session end to prepend a real entry to handoff.yaml +
-   changelog.yaml.
-
-Don't touch git in this bootstrap — the first /wrapup commit captures
-everything cleanly.
+Follow @BOOTSTRAP.md with my PRD @PRD.md
 ```
 
-The prompt leaves the falcon skill bundle (`.claude/skills/`, `agents/`, `commands/`, `docs/`, `rules/`, `claude.md`) untouched — those keep their illustrative asteroid references because they're skill-distribution content, not adopted-per-project content.
+(or copy-paste the prompt block from the file). It walks through PRD summary → context-file hydration → beads init → bead creation → Phase 1 refinement → next steps, with confirmation checkpoints at each stage.
 
-**If you don't have a PRD yet:** skip this section. Edit the 8 context files directly, or run `/scribe prd` to draft a Product Guidance section into `architecture.md` from a rough idea, then come back here once it's solid enough to seed beads.
+**If you don't have a PRD yet:** skip this section. Edit the 8 context files directly, or run `/scribe prd` to draft a Product Guidance section into `architecture.md` from a rough idea, then come back once it's solid enough to seed beads.
 
-**Want to try the workflow first?** Use [`examples/asteroids_prd.md`](examples/asteroids_prd.md) — an asteroid-themed sample PRD that matches the existing example content in this distribution. Paste it as your `@PRD.md` to smoke-test the bootstrap end-to-end before bringing in your real PRD.
+**Want to try the workflow first?** Use [`examples/asteroids_prd.md`](examples/asteroids_prd.md) — a sample PRD matching this distribution's example content — to smoke-test the bootstrap end-to-end before bringing in your real PRD.
+
 
 ## First-run setup (optional, recommended for autopilot use)
 
@@ -382,7 +255,11 @@ The kit's commands accept flags that gate behavior or pick a faster path:
 ### `/leroy`
 
 - `--skip-health` — skip the architecture.md Environment Health Checks at startup. Use when env is known healthy or working offline. (leroy v2.5.0+)
-- `--minimal` — continuation mode. Assumes you're resuming existing work (not picking new). Skips env health checks, `git log -5`, navigator §3/6/7/8/9, and per-bead `bd show` calls for Effort Forecast. Navigator runs one `bd list --json --limit 0` corpus fetch + in-memory label filter for `triage:ready` picks. The "Ready to Start" picker still surfaces alternatives by label (Size + Cynefin columns), but the `~Turns` column shows `N/A` since `bd show` is skipped. Falls back to full /leroy automatically if `handoff.yaml entries[0]` is null/empty. ~50% savings (~$0.07 vs ~$0.14). (leroy v2.8.0+, paired with navigator-recon v1.5.0)
+- `--minimal` — continuation mode. Assumes you're resuming existing work (not picking new). ~50% savings (~$0.07 vs ~$0.14). (leroy v2.8.0+, paired with navigator-recon v1.5.0)
+  - Skips env health checks, `git log -5`, navigator §3/6/7/8/9, and per-bead `bd show` calls for Effort Forecast.
+  - Navigator runs one `bd list --json --limit 0` corpus fetch + in-memory label filter for `triage:ready` picks.
+  - The "Ready to Start" picker still surfaces alternatives by label (Size + Cynefin columns), but the `~Turns` column shows `N/A` since `bd show` is skipped.
+  - Falls back to full /leroy automatically if `handoff.yaml entries[0]` is null/empty.
 
 ### `/wrapup`
 
@@ -425,8 +302,14 @@ Read `SKILL.md` first; it points to the other files.
 - **`.claude/commands/{leroy,wrapup}.md`** — session orchestration commands. Both carry versioned changelogs at the top of the file documenting flag additions and behavior changes.
 - **`.claude/agents/navigator/{navigator-recon,navigator-survey,navigator-maintenance}.md`** — orientation subagent (recon) + specialist routing (survey for complex, maintenance for simple). `/leroy` Step 3d cynefin-gates the routing dispatch.
 - **`.claude/docs/{enhancements,standards-history,handoff,changelog,work-item-templates,lint-integration}-schema.md`** — schema references for the typed artifacts the kit ships and the lint-integration recipes
-- **`.claude/scripts/check-bead-contract.py`** — bead tier-contract enforcement (backlog / triaged / ready label + section + rule requirements). Six mode flags (`--beads`, `--session`, `--since`, `--in-progress`, `--stale`, `--all`). Three output modes (human-readable text, `--json`, `--ids`). Severity-by-tier (HARD for ready / structural defects; SOFT for backlog/triaged refinement). ~1 sec for 160 beads via single bd_list corpus fetch. `CONTRACTS_VERSION` currently 1.2.
-- **`.claude/scripts/token-tracking.sh`** — phase-aware token tracking per bead. Five work phases (`plan / discover / implement / test / fix`) + coordinate phase for multi-bead planning. Bookmarks transcript line offsets at start/stop; computes deltas at stop. Per-project state at `.claude/tmp/.token_tracking/`. Cross-session resume + orphan detection. Started by `/leroy` Step 3e (per-bead) and Step 3d.2 (coordinate); flushed by `/wrapup` Task 3c. Closes the forecast → claim → track → close → metric → calibrate → refine loop.
+- **`.claude/scripts/check-bead-contract.py`** — bead tier-contract enforcement (backlog / triaged / ready label + section + rule requirements).
+  - Six mode flags (`--beads`, `--session`, `--since`, `--in-progress`, `--stale`, `--all`); three output modes (human-readable text, `--json`, `--ids`).
+  - Severity-by-tier: HARD for ready / structural defects; SOFT for backlog/triaged refinement.
+  - ~1 sec for 160 beads via single bd_list corpus fetch. `CONTRACTS_VERSION` currently 1.2.
+- **`.claude/scripts/token-tracking.sh`** — phase-aware token tracking per bead.
+  - Five work phases (`plan / discover / implement / test / fix`) + coordinate phase for multi-bead planning.
+  - Bookmarks transcript line offsets at start/stop; computes deltas at stop. Per-project state at `.claude/tmp/.token_tracking/`. Cross-session resume + orphan detection.
+  - Started by `/leroy` Step 3e (per-bead) and Step 3d.2 (coordinate); flushed by `/wrapup` Task 3c. Closes the forecast → claim → track → close → metric → calibrate → refine loop.
 - **`.claude/scripts/velocity-report.py`** — generates a self-contained HTML velocity report from `metrics.jsonl` with embedded chart data. Open in any browser.
 - **`.claude/hooks/session-start.sh`** — fires on `SessionStart` event. Injects session_id + transcript_path into context so workflow knows where to capture metrics from.
 - **`.claude/{enhancements,standards-history,handoff,changelog}.yaml`** — typed audit and state artifacts. `enhancements.yaml` tracks doc gaps + retros + standards candidates with status state machine (DAR 4 / wrapup v2.8.0). `standards-history.yaml` tracks rule firings + promoted rules with slug-keyed identity (DAR 9 / wrapup v2.12.0). `handoff.yaml` + `changelog.yaml` are session-state logs consumed by `/leroy`'s navigator-recon via `yq '.entries[0]'`.
@@ -445,7 +328,7 @@ This is an opinionated personal tool, but PRs are welcome for bug fixes, documen
 ## Backlog
 
 - **File monitoring as a cron alternative for autopilot:** watch dispatch files and sidecar state via filesystem events (inotify / fsevents) instead of polling on a `--watch` / `--auto-ack` / `--auto-amend` / worker-self-poll cadence. Autopilot reacts to state changes (intent emission, completion-hash write, `amendments_pending` flip) instantly rather than on the next bucket-driven interval, and silent-fire overhead drops to zero.
-- **Per-worker model selection at dispatch:** `--model=<name>` flag on `/falcon work beads` to route individual dispatches to specific Claude models (e.g., Haiku for mechanical chores, Opus for cross-cutting features) instead of inheriting the steering session's default model. Composes with `--sequential` so a single sequential dispatch can pin a model per bead.
+- **Model-selection follow-ups:** per-worker model selection shipped in v7.4.0 (`worker_model` dispatch field, `--bg` mode). Model choice binds at session boundaries by design — a worker never switches models mid-dispatch, so a `--sequential` dispatch intentionally runs all its beads on one model (a mid-sequence switch would discard the inherited context that `--sequential` exists to preserve). Remaining: per-respawn model override (escalate on `respawn-fresh`), autopilot per-bead-type model defaults for unattended dispatch.
 
 ## License
 

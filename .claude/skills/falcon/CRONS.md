@@ -5,7 +5,7 @@
 > **What lives here:**
 > - `## Worker Self-Poll Cron Templates (--bg mode only, v7.1.1)` — worker-side self-poll crons armed at intent-emission + DAR-pause-for-response points
 > - `## Autopilot Cron Prompt Templates` — the 5 steering-side autopilot crons (`--watch`, `--auto-ack`, `--auto-amend`, `--worker-cron`, `--release-on-merge`) with full Step 0-N specs + v7.1.2 condensed `CronCreate` prompts
-> - Shared cron infrastructure subsections: `### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)`, `### Cron Dispatch-Mode Conventions (v7.0.1)`, `### claude agents CLI surface (v7.0.1)`
+> - Shared cron infrastructure subsections: `### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)`, `### Cron Dispatch-Mode Conventions (v7.0.1)`, `### Wake-opportunism convention (v7.7.0)`, `### claude agents CLI surface (v7.0.1)`
 >
 > **What does NOT live here:**
 > - Dispatch file YAML schema → see [`REFERENCE.md`](./REFERENCE.md#dispatch-file-yaml-schema) `## Dispatch File YAML Schema`
@@ -144,6 +144,8 @@ Every autopilot cron template carries a telemetry-counter contract — on each f
 
 **Invariant**: for any slug, `fires == silent + useful` at all times. A fire that crashes mid-execution (rare; the cron prompt is short-running) leaves `fires` incremented but neither `silent` nor `useful` — this is the only legitimate accumulated drift and surfaces in /falcon retro as an unaccounted-for delta.
 
+**Source attribution (v7.7.0, wake-opportunism):** when work is executed opportunistically on another trigger's wake (per `### Wake-opportunism convention (v7.7.0)` below), the EXECUTING role's slug takes the `fires`/`useful` increments, and the telemetry entry gains a `source=` label naming the actual trigger (e.g. `source=opportunistic-via-amend-cron`, `source=steering-manual-review`). The `fires == silent + useful` invariant is explicitly UNCHANGED: opportunistic execution increments `fires` and `useful` together under the executing role's slug; the triggering cron's own slug counts only its own role's outcome. Precedent recorded on dispatch b92a16's telemetry (2026-06-13).
+
 **Backward compat**: dispatches predating v7.1.0 have `cron_telemetry: {}` (empty object — the schema field was reserved in v7.0.1). On first fire after upgrade, each cron initializes its sub-map. /falcon retro emission gracefully reports "telemetry not available" for dispatches with no `cron_telemetry` field at all.
 
 **Each template below has been updated to call this contract** at its Step 1 (fire entry) and at each exit path. The instrumentation is mechanical — no logic change in any cron's existing decision tree.
@@ -174,6 +176,21 @@ Every cron template below reads `worker_dispatch_mode` from the dispatch file at
 **`--paste` path** (cross-machine fallback): behaves like `--via-paste` for cron emission purposes. The cross-machine aspect is handled by the dispatch-file-on-shared-filesystem assumption being relaxed; the cron emission shape itself is the same as `--via-paste`.
 
 **Mode detection inside each cron template**: read `worker_dispatch_mode` from the dispatch file at Step 1 alongside the other state fields. Branch on it in the emission step (Step 3 or 4 depending on template) and the manual-ack/nudge guidance.
+
+### Wake-opportunism convention (v7.7.0)
+
+**Rule:** on ANY steering-session wake — cron fire, operator message, monitor event — after executing the triggering role's template, probe ALL active dispatches for pending actionable state (unacked intent, completed-but-unvalidated results, terminal states needing release, purposeless crons needing retirement) and process each finding under the appropriate role's rules. Scheduled crons are the AFK latency FLOOR, not a ceiling when steering is awake: cron cadence exists so unattended dispatches make progress, never to delay work a wake has already surfaced.
+
+**Provenance (live incident, dispatch b92a16, 2026-06-13):** the `--auto-amend` cron's probe observed a pending unacked intent, but role separation gave it no mandate to act — steering deferred to the `--auto-ack` cron's next fire, discarding ~4 minutes of free latency. After operator correction, the convention was validated in production the same session: the b92a16 completion was detected and fully closed out (validate → audit → release) from an auto-amend cron wake, and the now-purposeless auto-ack cron was opportunistically retired from a different role's wake.
+
+**Resolved design decisions (DAR, settled with user 2026-06-13 — recommendations accepted; do not relitigate):**
+
+1. **Cross-dispatch scope: YES** — a wake triggered by dispatch A's cron also processes dispatch B's pending state; each dispatch is processed under its own gates/rules file, so contexts don't conflate.
+2. **Telemetry attribution: executing role's slug** gets the fires/useful increment, plus a `source=` label naming the actual trigger (e.g. `source=opportunistic-via-amend-cron`, `source=steering-manual-review`). Precedent recorded on dispatch b92a16's telemetry. Mechanics in `### Cron Telemetry Instrumentation (v7.1.0, fdev-lbq.30)` above — the `fires == silent + useful` invariant is unchanged.
+
+**Per-template exit step:** each steering cron template below (`--watch`, `--auto-ack`, `--auto-amend`, `--release-on-merge`) carries a one-line pointer at its exit step — before exiting, apply the wake-opportunism check. Opportunistic processing runs under each dispatch's own autopilot gates; the gates themselves are unchanged by this convention. (`--worker-cron` is worker-side and out of scope — opportunism is a STEERING-wake convention.)
+
+**Relation to event-driven monitoring:** file monitoring as a cron alternative (README backlog) is the event-driven endgame — instant reaction to dispatch-file state changes. This convention is the cheap interim: it recovers most of the wasted latency at zero added infrastructure by spending wakes that already happened.
 
 ### `--watch` cron prompt template (v6.8.0)
 
@@ -339,6 +356,10 @@ If current session_status == "complete":
 2. Remove the snapshot file at {{ snapshot_file_path }}
 3. Emit a final status block with label `WATCH CRON RELEASED` confirming the cron
    cancelled itself and the dispatch reached terminal state.
+
+Before exiting — on EVERY fire, terminal or not — apply the wake-opportunism
+check per `### Wake-opportunism convention (v7.7.0)` above: probe all active
+dispatches for pending actionable state; process each under its own role's rules.
 
 ## Phase 2-5 note (forward compatibility)
 
@@ -583,6 +604,10 @@ If current session_status == "complete":
 1. CronDelete this cron (lookup by slug: `falcon-autoack-{{ dispatch_id }}`)
 2. Remove the snapshot file at {{ snapshot_file_path }}
 3. Emit a final block with label `AUTO-ACK CRON RELEASED` confirming cancellation.
+
+Before exiting — on EVERY fire, terminal or not — apply the wake-opportunism
+check per `### Wake-opportunism convention (v7.7.0)` above: probe all active
+dispatches for pending actionable state; process each under its own role's rules.
 
 ## Cross-cron coordination note
 
@@ -964,6 +989,10 @@ If current session_status == "complete":
 1. CronDelete this cron (lookup by slug: `falcon-amend-{{ dispatch_id }}`)
 2. Remove the snapshot file at {{ snapshot_file_path }}
 3. Emit a final block with label `AMEND CRON RELEASED` confirming cancellation.
+
+Before exiting — on EVERY fire, terminal or not — apply the wake-opportunism
+check per `### Wake-opportunism convention (v7.7.0)` above: probe all active
+dispatches for pending actionable state; process each under its own role's rules.
 
 ## Multi-cron coordination
 
@@ -1435,6 +1464,10 @@ If current session_status == "complete":
 1. CronDelete this cron (lookup by slug: `falcon-merge-{{ dispatch_id }}`)
 2. Remove the snapshot file at {{ snapshot_file_path }}
 3. Emit a final block with label `MERGE-CRON RELEASED` confirming cancellation.
+
+Before exiting — on EVERY fire, terminal or not — apply the wake-opportunism
+check per `### Wake-opportunism convention (v7.7.0)` above: probe all active
+dispatches for pending actionable state; process each under its own role's rules.
 
 ## Interaction with Step 4 (Stash for Wrapup + Auto-Release)
 

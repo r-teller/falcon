@@ -7,12 +7,35 @@ tier: scale
 version: 1.5.0
 created: 2026-03-21
 changelog:
-  - 1.5.0 (2026-06-10): Add continuation mode (paired with leroy.md v2.8.0 `--minimal` flag). When dispatched in continuation mode, navigator runs a leaner orientation: yq handoff.yaml entries[0] + yq changelog.yaml entries[0] + ONE `bd list --json --limit 0` corpus fetch with in-memory label filter for triage:ready (replaces 5 separate bd calls + 3 bd shows). Emits only sections 1, 2, 4, 5 (skips §3 epic health, §6 context-file mapping, §7 recommended work, §8 sequential-group, §9 enhancements alert). In §5, renders `~Turns` as `N/A` instead of calling bd show per bead. Step 5 raw output spec now includes `size:[S|M|L|?]` (free upgrade — Size is a required label at triage:ready but the prior output omitted it). Same Size column added to Full mode for table-shape consistency. Estimated savings vs full mode: ~9.5 sec wall-clock on tool calls (~98% reduction on tool latency), ~50% on eff-tokens.
-  - 1.4.0 (2026-06-10): Step 5 rewritten — replaces keyword-mapping heuristic with explicit parsing of each bead's `## Required Context` section (per `.claude/docs/work-item-templates.md` section contract). §6 Load Into Main Context now sources from bead-author declarations rather than navigator guesses. Atomic `cynefin:clear` beads with no Required Context get a clean "(none — beads are atomic)" signal. Under-hydrated `cynefin:complicated`/`cynefin:complex` beads (missing the section despite the hard-bind readiness gate) trigger a per-bead HYDRATION WARNING in §6, with the legacy keyword heuristic preserved as a deprecated `(fallback)` backstop. The deprecated keyword table is also broadened (auth row picks up OWASP/credential/sanitize/validator; new rows for tests.md and styleguide.md) so the fallback is less narrow when it does fire. Aligns navigator behavior with the hydrated-bead contract: bead author decides what context is required; navigator surfaces, not invents.
-  - 1.3.0 (2026-06-10): Add §9 Enhancements Alert — query `.claude/enhancements.yaml` (new typed log replacing legacy enhancements.md) for open-status counts grouped by kind, compare against per-kind thresholds in the file's `thresholds:` block, emit alert section only when at least one kind exceeds. Output is suppressed when nothing exceeds (no empty-state noise). Also surfaces aging cohorts (open retros > 90d, open candidates > 180d). Step 7 added; Output Checklist now requires 9 sections.
-  - 1.2.0 (2026-05-01): Filter "Ready to Start" by triage:ready (or legacy unlabeled) only; surface backlog/triaged items as informational "Needs Triage" tail-block under Section 5; require Recommended Work picks only from the filtered ready set.
-  - 1.1.0 (2026-03-21): Add tracker-conditional blocks
-  - 1.0.0 (2026-03-21): Initial version
+  - >-
+      1.5.0 (2026-06-10): Add continuation mode (paired with leroy.md v2.8.0 `--minimal` flag). When dispatched in continuation mode,
+      navigator runs a leaner orientation: yq handoff.yaml entries[0] + yq changelog.yaml entries[0] + ONE `bd list --json --limit 0` corpus
+      fetch with in-memory label filter for triage:ready (replaces 5 separate bd calls + 3 bd shows). Emits only sections 1, 2, 4, 5 (skips
+      §3 epic health, §6 context-file mapping, §7 recommended work, §8 sequential-group, §9 enhancements alert). In §5, renders `~Turns` as
+      `N/A` instead of calling bd show per bead. Step 5 raw output spec now includes `size:[S|M|L|?]` (free upgrade — Size is a required
+      label at triage:ready but the prior output omitted it). Same Size column added to Full mode for table-shape consistency. Estimated
+      savings vs full mode: ~9.5 sec wall-clock on tool calls (~98% reduction on tool latency), ~50% on eff-tokens.
+  - >-
+      1.4.0 (2026-06-10): Step 5 rewritten — replaces keyword-mapping heuristic with explicit parsing of each bead's `## Required Context`
+      section (per `.claude/docs/work-item-templates.md` section contract). §6 Load Into Main Context now sources from bead-author
+      declarations rather than navigator guesses. Atomic `cynefin:clear` beads with no Required Context get a clean "(none — beads are
+      atomic)" signal. Under-hydrated `cynefin:complicated`/`cynefin:complex` beads (missing the section despite the hard-bind readiness
+      gate) trigger a per-bead HYDRATION WARNING in §6, with the legacy keyword heuristic preserved as a deprecated `(fallback)` backstop.
+      The deprecated keyword table is also broadened (auth row picks up OWASP/credential/sanitize/validator; new rows for tests.md and
+      styleguide.md) so the fallback is less narrow when it does fire. Aligns navigator behavior with the hydrated-bead contract: bead
+      author decides what context is required; navigator surfaces, not invents.
+  - >-
+      1.3.0 (2026-06-10): Add §9 Enhancements Alert — query `.claude/enhancements.yaml` (new typed log replacing legacy enhancements.md) for
+      open-status counts grouped by kind, compare against per-kind thresholds in the file's `thresholds:` block, emit alert section only
+      when at least one kind exceeds. Output is suppressed when nothing exceeds (no empty-state noise). Also surfaces aging cohorts (open
+      retros > 90d, open candidates > 180d). Step 7 added; Output Checklist now requires 9 sections.
+  - >-
+      1.2.0 (2026-05-01): Filter "Ready to Start" by triage:ready (or legacy unlabeled) only; surface backlog/triaged items as informational
+      "Needs Triage" tail-block under Section 5; require Recommended Work picks only from the filtered ready set.
+  - >-
+      1.1.0 (2026-03-21): Add tracker-conditional blocks
+  - >-
+      1.0.0 (2026-03-21): Initial version
 ---
 
 # Navigator Recon — Session Orientation Specialist

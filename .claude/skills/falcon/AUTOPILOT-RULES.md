@@ -3,7 +3,7 @@
 > Template for the `.claude/rules/falcon-autopilot.md` rules file in adopting projects. Split out of `REFERENCE.md` at v7.2.0 when the parent file exceeded the 1500-line tripwire documented in `falcon-dev/.claude/architecture.md` Design Decisions.
 >
 > **What lives here:**
-> - `## falcon-autopilot.md Template` — the 6-section rules-file template (`SAFE_TO_ACK_INTENT` predicate + `SAFE_TO_AMEND` whitelist + `SAFE_TO_AMEND` denylist + cognitive audit hints + advisor delegation policy + amendment budget defaults)
+> - `## falcon-autopilot.md Template` — the 8-section rules-file template (`SAFE_TO_ACK_INTENT` predicate + `SAFE_TO_AMEND` whitelist + `SAFE_TO_AMEND` denylist + cognitive audit hints + advisor delegation policy + amendment budget defaults + worker model defaults + intent-gate escalation ladder/budget)
 > - 3 profile definitions (`conservative`, `standard`, `aggressive`) consumed by `/falcon enable-autopilot --profile=<name>`
 > - "How autopilot reads this file" + "Editing workflow" + "Related files" + adopter customization guidance
 >
@@ -390,13 +390,71 @@ amendment_budget_defaults:
 
 ---
 
+## 7. Worker model defaults (consulted ONLY by `--model auto`)
+
+`/falcon work beads --model auto` consults this block FIRST (deterministic policy lookup), before falling back to falcon's bead-evaluated proposal. It is NEVER consulted implicitly: a dispatch without `--model auto` — including every `--autopilot` dispatch — uses the `inherit` default or the explicitly named model, and this block is inert. See `.claude/skills/falcon/COMMANDS.md` `### --model` and PROTOCOL.md Step 1.
+
+Keys are cynefin domains (`cynefin:clear` / `cynefin:complicated` / `cynefin:complex`) and/or bead types; a `cynefin_type` compound key (e.g. `clear_chore`) wins over either single key when both match. Values are a model ID (passed verbatim as `claude --model <value>`) or `inherit`. Model IDs below are illustrative and drift — check your installed model lineup.
+
+```yaml
+model_defaults:
+  # PROJECT — uncomment to activate (consulted only when --model auto is passed)
+
+  # Compound keys (highest precedence): <cynefin>_<type>
+  # clear_chore: a-small-fast-model-id      # doc/cleanup chores need no steering-tier model
+  # clear_bug: a-small-fast-model-id
+
+  # Cynefin-domain keys:
+  # clear: a-small-fast-model-id
+  # complicated: a-mid-tier-model-id
+  # complex: inherit                        # complex work stays on the steering session's model
+
+  # Bead-type keys (lowest precedence):
+  # chore: a-small-fast-model-id
+  # decision: inherit                       # spikes keep full capability
+```
+
+Resolution order under `--model auto`: compound key → cynefin key → type key → no match. On no match, falcon evaluates the bead set (cynefin, size, Effort Forecast) and proposes per the PROTOCOL.md Step 1 heuristic table. Either way the rationale is recorded in the dispatch file (`worker_model_rationale`). Multi-bead dispatches resolve ONE model for the whole dispatch (session-boundary principle) — when beads map to different entries, the strongest-tier match wins; note the mix in the rationale.
+
+**Not profile-managed:** `/falcon enable-autopilot` profiles do not activate these entries — uncomment manually. The block only changes behavior for dispatches that explicitly pass `--model auto`, so profile activation would be a silent no-op footgun either way.
+
+---
+
+## 8. Intent-gate escalation ladder + budget
+
+Consumed by the intent-gate model escalation flow (PROTOCOL.md `### Intent-gate model escalation (v7.5.0)`): the `escalate <dispatch-id>` operator verb resolves its default target from the ladder, and the `--auto-ack` cron may escalate on predicate failure ONLY when the ladder is uncommented AND budget remains. Both keys ship commented in EVERY profile — `/falcon enable-autopilot` never activates them (auto-escalation respawns workers; that is an explicit per-project opt-in, not a profile default). No ladder = the auto-ack cron defers/halts on predicate failure exactly as before v7.5.0.
+
+The kit defines the mechanism; the PROJECT defines the values — there is no kit-canonical tier ordering. Model IDs below are illustrative and drift; check your installed model lineup.
+
+```yaml
+escalation_ladder:
+  # PROJECT — uncomment to activate. Ordered weakest -> strongest; escalation
+  # moves to the next entry ABOVE the dispatch's current worker_model. A current
+  # model not on the ladder escalates to the ladder's strongest entry.
+
+  # - a-small-fast-model-id
+  # - a-mid-tier-model-id
+  # - a-steering-tier-model-id
+
+escalation_budget: 1
+  # Max escalations per dispatch (default 1). SEPARATE from amendment_budget_defaults
+  # (§6): escalation spends at the pre-state-change intent gate; amendments spend
+  # post-completion — neither decrements the other. The auto-ack cron NEVER exceeds
+  # this cap; an operator may, with explicit confirmation.
+```
+
+Every escalation is recorded in the dispatch file's `escalations[]` (from_model, to_model, rationale, source, timestamp — REFERENCE.md schema) and surfaced in `/falcon status`, `/falcon list-pending`, and the dispatch report's `decisions_for_human[]`. Orchestrator-owns-model invariant: the orchestrator resolves the escalated model before the successor worker inits; the worker never proposes its own tier.
+
+---
+
 ## How autopilot reads this file
 
 Per `.claude/skills/falcon/PROTOCOL.md` §3 (Receive and Validate Worker Report) and §3b (Steering-Side Cognitive Audit), the autopilot consumer (when implemented) parses this file at dispatch resume and at completion-signal time.
 
 Order of evaluation:
 
-1. **At intent emission** → `safe_to_ack_intent.gates` (universal) + `safe_to_ack_intent.project_gates` (uncommented only) → all pass = auto-ack
+0. **At dispatch time, ONLY when `--model auto` was passed** → `model_defaults` (uncommented only) → match = proposed worker model; no match = bead-evaluated fallback (PROTOCOL.md Step 1). Never consulted without `--model auto`.
+1. **At intent emission** → `safe_to_ack_intent.gates` (universal) + `safe_to_ack_intent.project_gates` (uncommented only) → all pass = auto-ack. **On predicate FAILURE (v7.5.0):** if `escalation_ladder` is uncommented AND `len(escalations[]) < escalation_budget` → escalate (kill + respawn on next ladder entry, record in `escalations[]`); otherwise defer/halt with one inline note (pre-v7.5.0 behavior).
 2. **At completion signal** → mechanical validation (steps 1-5 in PROTOCOL.md §3) → cognitive audit (§3b) consulting `cognitive_audit_hints` (uncommented only)
 3. **If a gap surfaces** → consult `safe_to_amend_whitelist` (universal + uncommented project) → if matches: auto-issue amendment up to `amendment_budget_defaults` cap
 4. **If gap matches `safe_to_amend_denylist`** → never auto-amend; surface to user

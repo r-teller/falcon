@@ -9,9 +9,25 @@ created: 2026-05-01
 permissionMode: default
 color: green
 changelog:
-  - 1.1.1 (2026-05-22): Correct the 1.1.0 Step 4 fix — the original `bd update <id> --add-label X` form WAS correct (verified against `bd update --help` on bd 1.0.3: `--add-label strings (repeatable)`). The 1.1.0 switch to `bd label add <id> X size:medium cynefin:complicated` was actively wrong: per `bd label add --help`, the variadic positional is **issue IDs**, not labels (`bd label add [issue-id...] [label]`) — only the last positional becomes the label; the rest are interpreted as additional issue IDs, which then fail to resolve. This is the failure mode already captured in `.claude/enhancements.md:812`. Step 4 reverted to the repeatable `--add-label` form, explicitly documented as repeatable for the multi-label case scribe-refine actually needs (size + cynefin + persona + layer in one call).
-  - 1.1.0 (2026-05-22): bd 1.0.x command-syntax corrections. (a) Step 4 label syntax — see 1.1.1 retraction above. (b) Step 7 triage promotion: replace the manual `--remove-label triage:backlog --add-label triage:ready` form with `bd set-state <id> triage=ready`. Two reasons: (i) `bd set-state` is bd's first-class atomic helper — it removes any existing `triage:*` label and adds the new one in a single operation, eliminating the zero-or-two-label window the raw form leaves open; (ii) more importantly, `bd set-state` writes an **event bead** recording the state change (the durable source of truth), with the label downstream as a fast lookup cache. Raw `bd label add / bd label remove` skips event-bead recording entirely, so triage promotions made that way leave no audit trail. Per `bd set-state --help` on bd 1.0.3.
-  - 1.0.0 (2026-05-01): Initial version. Pairs with scribe-init v2.0.0 — scribe-init creates beads at triage:backlog with full template body; scribe-refine promotes them to triage:ready once the Readiness Checklist passes.
+  - >-
+      1.1.1 (2026-05-22): Correct the 1.1.0 Step 4 fix — the original `bd update <id> --add-label X` form WAS correct (verified against `bd
+      update --help` on bd 1.0.3: `--add-label strings (repeatable)`). The 1.1.0 switch to `bd label add <id> X size:medium
+      cynefin:complicated` was actively wrong: per `bd label add --help`, the variadic positional is **issue IDs**, not labels (`bd label
+      add [issue-id...] [label]`) — only the last positional becomes the label; the rest are interpreted as additional issue IDs, which then
+      fail to resolve. This is the failure mode already captured in `.claude/enhancements.md:812`. Step 4 reverted to the repeatable
+      `--add-label` form, explicitly documented as repeatable for the multi-label case scribe-refine actually needs (size + cynefin +
+      persona + layer in one call).
+  - >-
+      1.1.0 (2026-05-22): bd 1.0.x command-syntax corrections. (a) Step 4 label syntax — see 1.1.1 retraction above. (b) Step 7 triage
+      promotion: replace the manual `--remove-label triage:backlog --add-label triage:ready` form with `bd set-state <id> triage=ready`. Two
+      reasons: (i) `bd set-state` is bd's first-class atomic helper — it removes any existing `triage:*` label and adds the new one in a
+      single operation, eliminating the zero-or-two-label window the raw form leaves open; (ii) more importantly, `bd set-state` writes an
+      **event bead** recording the state change (the durable source of truth), with the label downstream as a fast lookup cache. Raw `bd
+      label add / bd label remove` skips event-bead recording entirely, so triage promotions made that way leave no audit trail. Per `bd
+      set-state --help` on bd 1.0.3.
+  - >-
+      1.0.0 (2026-05-01): Initial version. Pairs with scribe-init v2.0.0 — scribe-init creates beads at triage:backlog with full template
+      body; scribe-refine promotes them to triage:ready once the Readiness Checklist passes.
 ---
 
 # Scribe Refine — Bead Enrichment Specialist

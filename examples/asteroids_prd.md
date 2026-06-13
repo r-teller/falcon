@@ -1,6 +1,6 @@
 # Asteroids: Wave Defense — Product Requirements Document
 
-> **Example PRD** — a sample input for the [Bootstrap workflow in README.md](../README.md#bootstrap-a-new-project-from-your-prd). Paste this (or reference its path) into a Claude Code session in this repo to see how the bootstrap prompt hydrates `.claude/{architecture,backend,...}.md` and seeds initial beads. Matches the asteroid theme already threaded through the distribution's example content.
+> **Example PRD** — a sample input for the [bootstrap workflow](../BOOTSTRAP.md). In a Claude Code session in this repo, run `Follow @BOOTSTRAP.md with my PRD @examples/asteroids_prd.md` (or paste the prompt block from BOOTSTRAP.md) to see how it hydrates `.claude/{architecture,backend,...}.md` and seeds initial beads. Matches the asteroid theme already threaded through the distribution's example content.
 
 ---
 

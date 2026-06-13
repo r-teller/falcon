@@ -68,8 +68,11 @@ Categories surfaced (each with action hints):
 4. **AMENDMENT BUDGET EXHAUSTED** — dispatches where `auto_amendment_count >= amendment_budget` AND lock still held
 5. **PR CLOSED UNMERGED** — dispatches with `release_on_merge: true` where the merge cron's last snapshot recorded `pr_state: CLOSED` (PR abandoned; user must release or re-dispatch)
 6. **STALE LOCKS** — dispatches whose Step 4 hold-the-lock condition has been met for > 2h (auto-release declined; manual arbitration overdue)
+7. **QUEUED DISPATCHES (v7.6.0)** — entries in `.claude/tmp/falcon-queue.yaml` waiting on a lock release, each with spec, flags, and age since `enqueued_utc`; entries older than 24h are flagged STALE (no auto-expiry — cancel with `/falcon dequeue <queue-id>` or let the next release re-evaluate them)
 
 Each entry includes a one-line action hint (`/falcon release <id>` / `bd close <id>` / `manual amendment` / etc.). Total count at the bottom. Empty categories shown with `(0)` so you know they were checked.
+
+**(v7.5.0)** Each dispatch line additionally shows `escalations: N/<budget>` when `escalations[]` is non-empty or an `escalation_ladder` is configured — informational (like the respawn-generations indicator), not a pending-human item. See PROTOCOL.md `### Intent-gate model escalation (v7.5.0)`.
 
 Output sketch:
 
@@ -96,7 +99,12 @@ Pending human action (across N active dispatches):
 
   STALE LOCKS (> 2h held past validation pass) (0):
 
-Total: 4 items across 4 dispatches.
+  QUEUED DISPATCHES (1):
+    queue 4f9c2a (spec: example-qrs.2,example-qrs.3, flags: --sequential --autopilot):
+      enqueued 2026-05-22T09:14Z (age 26h) — STALE
+      Action: wait for next lock release, OR /falcon dequeue 4f9c2a to cancel
+
+Total: 5 items across 4 dispatches + 1 queue entry.
 ```
 
 Fits the existing `list-locks` / `list-sessions` read-and-present pattern. Read-only; no side effects.
@@ -104,6 +112,12 @@ Fits the existing `list-locks` / `list-sessions` read-and-present pattern. Read-
 For implementation walkthrough: see [`PROTOCOL.md`](./PROTOCOL.md#falcon-list-pending) `### /falcon list-pending`.
 
 **Recommended cadence:** run at the start of any session that touches a branch with active dispatches (`/leroy` or `/gogogo` skills can wire this in as part of session-startup orientation). Also run after any `--watch` cron STATUS UPDATE block that mentions a new DAR or amendment-pending state.
+
+---
+
+### `/falcon dequeue <queue-id>` ✓ (v7.6.0)
+
+Manually cancel a pending-dispatch entry created by `--queue`. Removes the entry with the matching `queue_id` from `.claude/tmp/falcon-queue.yaml` (atomic read-modify-write; absent file or unknown id → informative no-op) and reports what was removed (spec, flags, age). The only manual queue-removal path — entries never auto-expire; `/falcon list-pending` flags entries older than 24h as STALE so they surface for exactly this command. See PROTOCOL.md Step 1c (6b) for enqueue and Step 4 "Queue scan on release" for the automatic dequeue path.
 
 ---
 
@@ -181,9 +195,11 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-ha
 
 ---
 
-### `/falcon respawn-fresh <dispatch-id> [--reason=<reason>] [--force]` ✓
+### `/falcon respawn-fresh <dispatch-id> [--reason=<reason>] [--force] [--model <model-id>] [--thinking <mode>]` ✓
 
 **v7.0.0+ sub-command.** Spawn a FRESH `--bg` worker that continues an existing dispatch where the prior worker died (context exhausted, safety-tripped, stuck/looping, or operator-chosen replacement). The new worker picks up via a three-step recovery sequence that pushes any unpushed commits, closes beads with landed-but-bd-still-open work, and reconciles in-progress amendments — all before resuming normal lifecycle.
+
+**Per-respawn model/thinking override (v7.5.0):** `--model <model-id>` and `--thinking <none|think|ultrathink|inherit>` launch the successor on different values than the dispatch file currently records. Operator-prompted ONLY — nothing on this surface escalates automatically (intent-gate escalation builds on this mechanism but is its own flow; see `### escalate` below and PROTOCOL.md `### Intent-gate model escalation (v7.5.0)`). Default (no flag) = reuse the recorded `worker_model` / `worker_thinking_mode`, exactly as v7.4.0 shipped. When a flag is given, the new value is written to the dispatch file BEFORE relaunch, so the recorded values stay authoritative for any later respawn. This gives the `--reason=manual-replace` model-swap use case a concrete mechanism, and it respects the session-boundary principle: the respawn is a fresh session — a worker never switches models mid-session. The orchestrator owns model selection at every point in the lifecycle; the worker has no self-selection role. Because respawn-fresh refuses non-`--bg` dispatches (precondition below), the override is always enforceable here — the via-paste advisory caveat from v7.4.0 does not arise on this surface.
 
 **Compare to Claude Code's `claude respawn <id>` (v7.0.1, fdev-lbq.20):** these are different primitives. `claude respawn <id>` restarts the SAME session (running or stopped) with conversation intact — useful for picking up an updated Claude Code binary mid-session. `/falcon respawn-fresh <dispatch-id>` REPLACES the worker with a new session (new session ID, new agent-viewer row with `-r<N>` suffix), preserving the dispatch but forensically recording the prior in `worker_bg_prior_sessions[]`. The two are not interchangeable: use `claude respawn` for "same conversation, fresh process"; use `/falcon respawn-fresh` for "fresh conversation, same dispatch."
 
@@ -193,18 +209,19 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-ha
 
 1. Read the dispatch file at `.claude/tmp/falcon-dispatch-<dispatch-id>.yaml`. Refuse if not found OR if `session_status: complete` (the dispatch is finished; respawn doesn't make sense). Refuse if `worker_dispatch_mode != "bg"` (respawn-fresh only applies to background-session dispatches).
 2. Append the current `worker_bg_session_id` + spawn timestamp + now + reason to `worker_bg_prior_sessions[]` (read-only forensic record; never re-claimed).
-3. Spawn new `[MAX_THINKING_TOKENS=<budget>] claude --bg [--model <model-id>] --name "<prefix>-falcon-<dispatch-id>-r<N>"` where N counts the respawn generation (initial dispatch = no suffix; first respawn = `-r2`; second = `-r3`; etc.). The bracketed parts reuse the dispatch file's recorded `worker_model`/`worker_thinking_mode` with the same inherit-omits rules as the initial launch (v7.4.0; missing fields = inherit; per-respawn override is fdev-334, future). The bootstrap-prompt template substitutes `dispatch_id` + `repo_path` exactly as for an initial dispatch.
-4. Update `worker_bg_session_id` to the new short ID.
-5. Set `dispatch_continuation: true` on the dispatch file so the new worker's bootstrap detects continuation mode and executes the three-step recovery sequence (see PROTOCOL.md `### --bg dispatch mode (v7.0.0)` for the bootstrap branch).
-6. **Confirmation-gated `claude stop` (per quartermaster R1):** print the suggested `claude stop <old-id>` command alongside a one-line confirmation prompt: `Prior session <id> may still be alive (reason: <reason>). Stop it? [y/n]`. On `y`, run `claude stop <old-id>` to free the dead session's process. On `n` (or anything else), skip — the prior entry stays in `worker_bg_prior_sessions[]` for forensics either way. Skip the prompt entirely if `--force` is passed.
-7. Print summary: new session ID + suggested `claude agents` row name + reason for respawn.
+3. **(v7.5.0)** If `--model` and/or `--thinking` was passed: validate the value (`--thinking` must be one of `none|think|ultrathink|inherit`; `--model` is any value `claude --model` accepts, or `inherit`), then atomically write it to the dispatch file's `worker_model` / `worker_thinking_mode` BEFORE relaunch. The dispatch file's recorded values stay authoritative for any later respawn; the override is a recorded state change, not a launch-time one-off.
+4. Set `dispatch_continuation: true` on the dispatch file so the new worker's bootstrap detects continuation mode and executes the three-step recovery sequence (see PROTOCOL.md `### --bg dispatch mode (v7.0.0)` for the bootstrap branch). This write MUST precede the spawn — the flag must be on disk before the successor's bootstrap reads the file, or the successor races past the recovery sequence (matches PROTOCOL.md walkthrough step 4).
+5. Spawn new `[MAX_THINKING_TOKENS=<budget>] claude --bg [--model <model-id>] --name "<prefix>-falcon-<dispatch-id>-r<N>"` where N counts the respawn generation (initial dispatch = no suffix; first respawn = `-r2`; second = `-r3`; etc.). The bracketed parts use the dispatch file's recorded `worker_model`/`worker_thinking_mode` — as just updated by step 3 when overrides were given — with the same inherit-omits rules as the initial launch (v7.4.0; missing fields = inherit). The bootstrap-prompt template substitutes `dispatch_id` + `repo_path` exactly as for an initial dispatch.
+6. Update `worker_bg_session_id` to the new short ID.
+7. **Confirmation-gated `claude stop` (per quartermaster R1):** print the suggested `claude stop <old-id>` command alongside a one-line confirmation prompt: `Prior session <id> may still be alive (reason: <reason>). Stop it? [y/n]`. On `y`, run `claude stop <old-id>` to free the dead session's process. On `n` (or anything else), skip — the prior entry stays in `worker_bg_prior_sessions[]` for forensics either way. Skip the prompt entirely if `--force` is passed.
+8. Print summary: new session ID + suggested `claude agents` row name + reason for respawn (+ model/thinking override, if any was applied at step 3).
 
 **Reasons (informational, not enforcement):**
 
 - `context-exhausted` — worker hit context budget; fresh context needed
 - `safety-tripped` — worker session got contaminated by safety-filter refusal or similar
 - `stuck-looping` — worker in non-productive state
-- `manual-replace` — user-initiated for any other reason (model swap, etc.)
+- `manual-replace` — user-initiated for any other reason (model swap via `--model`/`--thinking`, etc.)
 - `crashed` — supervisor lost the session unexpectedly
 - omit `--reason` → defaults to `manual-replace`
 
@@ -215,7 +232,7 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-ha
 - Context exhaustion: `claude agents` peek shows the worker is stalling on context-full errors; the worker can't make progress
 - safety-tripped: worker hit a content-policy refusal it can't recover from; `claude logs <id>` shows the refusal in recent output (read in OPERATOR'S OWN judgment — see §3.15 advisory)
 - Stuck/looping: worker is repeating the same tool call without progress; `claude logs <id>` shows repetition
-- Manual: any other reason (model swap, environmental change, etc.) where a fresh context is preferable to attaching to the existing session
+- Manual: any other reason (model swap via `--model`/`--thinking`, environmental change, etc.) where a fresh context is preferable to attaching to the existing session
 
 **When NOT to invoke:**
 
@@ -227,6 +244,8 @@ For implementation detail: see [`PROTOCOL.md`](./PROTOCOL.md#phase-transition-ha
 
 - `--reason=<code>` — optional informational reason; defaults to `manual-replace`. Captured in `worker_bg_prior_sessions[].reason` for forensics + `/falcon retro --branch` audit categorization.
 - `--force` — skip the `claude stop` confirmation prompt. Suitable for scripted invocation; not recommended interactively.
+- `--model <model-id>` — **(v7.5.0)** relaunch the successor on a different model (typically escalating to a stronger tier after a stuck/failed worker; occasionally downgrading). Written to the dispatch file's `worker_model` before relaunch (recorded values stay authoritative for later respawns). `--model inherit` resets to the inherit default. Omitted = reuse recorded value.
+- `--thinking <none|think|ultrathink|inherit>` — **(v7.5.0)** relaunch the successor with a different extended-thinking budget. Written to `worker_thinking_mode` before relaunch, same semantics as `--model` above. Omitted = reuse recorded value.
 
 **Compatibility with autopilot:**
 
@@ -239,11 +258,25 @@ For implementation walkthrough: see [`PROTOCOL.md`](./PROTOCOL.md#falcon-respawn
 
 ---
 
+### `escalate <dispatch-id> [--model <model-id>]` ✓
+
+**(v7.5.0) Intent-response verb.** At the intent gate, alongside `proceed <dispatch-id>` (ack) and amendment/halt, the operator can respond `escalate <dispatch-id>` in the steering session: kill the worker and respawn it on a stronger model — same dispatch-id, same locks — paying the respawn cost at intent time, before any state change, instead of discovering tier insufficiency at completion review.
+
+**Model resolution:** explicit `--model <model-id>` wins; otherwise the next entry above the current `worker_model` in the project's `escalation_ladder` (falcon-autopilot.md — see AUTOPILOT-RULES.md `## 8.`). No ladder configured AND no `--model` → refuse with a one-line hint.
+
+**Behavior:** append an `escalations[]` entry to the dispatch file (from_model, to_model, rationale, source: `operator`, timestamp), then execute the `/falcon respawn-fresh <dispatch-id> --model <target>` flow. The orchestrator owns model selection at every point — the worker never proposes its own tier; the respawn is a fresh session (session-boundary principle). File-scope locks belong to the dispatch and survive the respawn untouched (verified, not re-acquired).
+
+**Budget:** consumes `escalation_budget` (default 1 per dispatch; falcon-autopilot.md `## 8.`) — a SEPARATE budget from `--amendment-budget` (intent-gate phase vs post-completion phase; neither decrements the other). Operator escalation past the budget asks for explicit confirmation; the `--auto-ack` cron's escalation path (PROTOCOL.md `### Intent-gate model escalation (v7.5.0)`) never exceeds it.
+
+`/falcon list-pending` shows the escalation count/budget per dispatch (informational). For wiring detail: see PROTOCOL.md `### Intent-gate model escalation (v7.5.0)`.
+
+---
+
 ### `/falcon create-rules` ✓
 
 Populate `.claude/rules/falcon-autopilot.md` with the project-specific gate spec consumed by autopilot flags (`--auto-ack`, `--auto-amend`, `--advisor`, `--amendment-budget`). The file is a forward-looking spec — the autopilot flags themselves are `⊘` (proposed), but the gate file can be authored, reviewed, and iterated on independently so it's ready when the autopilot consumer lands.
 
-The command writes the template from [`REFERENCE.md`](./REFERENCE.md#falcon-autopilotmd-template) to `.claude/rules/falcon-autopilot.md`. The template has six sections:
+The command writes the template from [`AUTOPILOT-RULES.md`](./AUTOPILOT-RULES.md#falcon-autopilotmd-template) to `.claude/rules/falcon-autopilot.md`. The template has eight sections:
 
 1. **`SAFE_TO_ACK_INTENT` predicate** — 4-gate spec for auto-acking worker intent paragraphs
 2. **`SAFE_TO_AMEND` whitelist** — universal defaults + project-specific safe amendments
@@ -251,6 +284,8 @@ The command writes the template from [`REFERENCE.md`](./REFERENCE.md#falcon-auto
 4. **Bead-type-specific cognitive audit hints** — "any project-binding concern the AC didn't gate on?" prompts
 5. **Advisor delegation policy** — when to fork to `/quartermaster` (or other registered advisors) for ambiguous decisions
 6. **Default amendment budget** — recommended `--amendment-budget` per bead type
+7. **Worker model defaults** — `model_defaults` block consulted ONLY by `--model auto` (v7.5.0; never consulted implicitly)
+8. **Intent-gate escalation ladder + budget** — `escalation_ladder` + `escalation_budget` consumed by the `escalate` verb and the `--auto-ack` escalation path (v7.5.0; ships commented in every profile)
 
 Universal sections (those that apply to every falcon-using project) are pre-populated and marked `UNIVERSAL — do not edit`. Project-specific sections contain placeholders + examples drawn from the project's existing `.claude/rules/*.md` files (the command reads `standards.md`, `development-standards.md`, `workflow-execution.md`, `workflow-agents.md` to seed sensible defaults).
 
@@ -317,7 +352,7 @@ Profile is REQUIRED — there is no default. The command refuses to operate with
 
 - **`standard`** — recommended for general use. Activates ALL §3 denylist items + project-seeded §1 gates + project-seeded §2 whitelist items where their detection conditions hold + project-seeded §4 cognitive audit hints + §5 advisor delegation (if quartermaster or other registered skill exists). Per-bead-type `amendment_budget_defaults` from the template's recommended values (chore: 2, bug: 1, feature_small: 2, feature_medium: 3, feature_large: 5, decision/spike: 0, paired: 1, epic: 0). Use after running conservative for a sprint or two and confirming the autopilot is well-calibrated.
 
-- **`aggressive`** — maximum autopilot autonomy. Activates EVERY `# PROJECT —` item across all 6 sections, subject only to the detection conditions (items whose detection condition fails stay commented). Generous `amendment_budget_defaults` (chore: 3, feature_small: 3, feature_medium: 5, feature_large: 8, others same as standard). Use only after running standard for several sprints and you've verified the autopilot does not over-issue amendments OR forks too many ambiguous decisions to the advisor.
+- **`aggressive`** — maximum autopilot autonomy. Activates EVERY `# PROJECT —` item across the profile-managed sections (§1-§6; §7 `model_defaults` and §8 escalation ladder/budget are not profile-managed — see AUTOPILOT-RULES.md `## 7.` / `## 8.`), subject only to the detection conditions (items whose detection condition fails stay commented). Generous `amendment_budget_defaults` (chore: 3, feature_small: 3, feature_medium: 5, feature_large: 8, others same as standard). Use only after running standard for several sprints and you've verified the autopilot does not over-issue amendments OR forks too many ambiguous decisions to the advisor.
 
 **Detection-driven uncommenting**: profiles aren't blind bulk-uncomment. Each profile defines a list of `(section, item, detection-condition)` tuples. The detection condition is a file-existence or grep check against the project (e.g., `example_project_gate` activates only if `.claude/fair-play-policy.md` exists; `missing_wave_pack_version_pin_bump` activates only if `development-standards.md` references `wave_pack_version`). Items whose condition fails are left commented even at aggressive. This prevents activating gates that reference standards the project doesn't have.
 
@@ -333,7 +368,7 @@ For the canonical profile definitions (the source of truth for what each profile
 
 1. Refuse if `.claude/rules/falcon-autopilot.md` does not exist. Suggest `/falcon create-rules` first.
 2. Refuse if `--profile=<name>` is missing OR not one of the three known profiles.
-3. Read the rules file; parse to identify all `# PROJECT —` blocks across the 6 sections.
+3. Read the rules file; parse to identify all `# PROJECT —` blocks across the profile-managed sections (§1-§6; §7 `model_defaults` and §8 escalation ladder/budget are not profile-managed).
 4. For each candidate item from the chosen profile, evaluate its detection condition. Build the diff (items to uncomment).
 5. Print the diff (always — for both dry-run and live).
 6. If `--dry-run`: exit. No write, no backup.
@@ -357,7 +392,7 @@ For the canonical profile definitions (the source of truth for what each profile
 
 **When to use:**
 
-- First-time autopilot setup, after `/falcon create-rules`, when you want to enable autopilot without manually finding the right blocks across all 6 sections.
+- First-time autopilot setup, after `/falcon create-rules`, when you want to enable autopilot without manually finding the right blocks across the profile-managed sections.
 - Profile upgrade — re-run with a different profile to switch from conservative → standard or standard → aggressive. The archive-before-write pattern preserves the prior state.
 - Profile downgrade is also supported, but you'll need to manually re-comment items that the new profile leaves out (the command only uncomments; it doesn't re-comment).
 
@@ -459,6 +494,24 @@ Mutually exclusive with `--bg-isolated`.
 
 ---
 
+### `--model <model-id|auto|inherit>` ✓
+
+**(v7.5.0)** Selects the worker's model. The flag's value maps 1:1 onto the dispatch file's `worker_model` field (v7.4.0). Three values:
+
+1. **`inherit` (default — flag omitted).** The worker gets the steering session's model: `--model` is omitted at launch, identical to shipped v7.4.0 default behavior. This default holds in ALL modes **including `--autopilot`** — the `model_defaults` policy block is NEVER consulted implicitly. Explicitly passing `--model inherit` is the same as omitting the flag.
+2. **`<model-id>`.** The named model is recorded as `worker_model` and passed verbatim as `--model <value>` on the launch.
+3. **`auto`.** Falcon picks, deterministically first: consult the `model_defaults` block in `.claude/rules/falcon-autopilot.md` (keyed by cynefin domain and/or bead type — see AUTOPILOT-RULES.md `## 7.`); if no entry matches, falcon evaluates the bead set (cynefin labels, size, Effort Forecast) and proposes per the PROTOCOL.md Step 1 heuristic table, with the rationale recorded either way. Manual mode: the proposal surfaces at the Step 1 interactive gate as today. `--autopilot` mode: the proposal is auto-accepted; choice + rationale are recorded in the dispatch file (`worker_model` + `worker_model_rationale`) and surfaced in the dispatch report.
+
+Precedence: explicit `<model-id>` > `auto` (policy lookup, then bead-evaluated fallback) > `inherit`.
+
+**Orchestrator-owns-model invariant:** whichever value is used, the model is resolved at dispatch-file write time, BEFORE worker init — and the orchestrator always indicates the model. The worker has no self-selection role at any point in the lifecycle.
+
+**Composes with `--sequential`:** one model for the whole dispatch — the worker is a single session and a worker never switches models mid-session (session-boundary principle). Per-bead model choice within one dispatch requires separate dispatches.
+
+**Enforcement is `--bg`-only** (same caveat as v7.4.0): in `--via-paste`/`--paste` modes the recorded value is advisory — no launch runs, so the worker tab runs whatever model the operator launched.
+
+---
+
 ### `--sequential` ✓
 
 Opt-in override of the self-conflict check for the **single-worker case**. When set, two or more beads in the spec are ALLOWED to share `file_scope` overlap because one worker handles them in declared order in a single session (inheriting context cleanly, avoiding merge conflicts, saving ~10-20 steering turns vs the 2-dispatch pattern).
@@ -468,6 +521,21 @@ CLI list-order is the default execution order; `bd blocked_by` ordering wins if 
 NOT appropriate when:
 - Total worker context budget would exceed ~120 turns (split into separate dispatches for fresh context)
 - Failure isolation between beads is more valuable than orchestration savings
+
+---
+
+### `--queue` ✓ (v7.6.0)
+
+Defer instead of reject on lock conflict. Without this flag, a Step 1c lock conflict HARD-rejects the dispatch and the operator's only option is manual re-invocation after the blocking dispatch releases. With `--queue`, the conflict registers a pending-dispatch entry in the cross-session FIFO at `.claude/tmp/falcon-queue.yaml` (`{queue_id, spec, flags, enqueued_utc, enqueuing_session}`) and reports the queue position — letting the operator declare the next dispatch while the current one runs instead of babysitting the lock.
+
+Dequeue semantics:
+
+- **Trigger:** any lock release — Step 4 auto-release OR manual `/falcon release` — scans the queue. Cross-session: whichever steering session performs the release dequeues.
+- **Re-resolution:** nothing from enqueue time is trusted except the spec string and flags. The eldest non-conflicting entry gets the FULL pre-dispatch sequence re-run (Step 1 bead resolution, Step 1b grep audit, Step 1c lock check, mode detection). On re-conflict, the entry stays queued at its original position.
+- **Flags preserved verbatim:** `--sequential`, `--autopilot`, `--model`, budgets, etc. ride the queue entry and govern the dequeued dispatch exactly as if typed fresh. No extra dequeue confirmation beyond the mode's own gates (manual dispatches still pause at intent; autopilot dispatches follow `falcon-autopilot.md`).
+- **No auto-expiry:** entries older than 24h are flagged STALE in `/falcon list-pending`; cancel manually with `/falcon dequeue <queue-id>`.
+
+On no conflict, `--queue` is a no-op — the dispatch proceeds immediately. See PROTOCOL.md Step 1c (6b) + Step 4 "Queue scan on release"; entry schema in REFERENCE.md `## falcon-queue.yaml Schema (v7.6.0)`.
 
 ---
 

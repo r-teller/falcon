@@ -288,7 +288,12 @@ worker_model: "inherit"     # v7.4.0+. Model the worker session runs. Values: "i
                             # environment default, identical to pre-v7.4.0 behavior) |
                             # any valid model ID accepted by `claude --model`.
                             # Set by steering at Step 2 from the Step 1 proposal surface
-                            # (user can override the proposal). Consumed by the --bg
+                            # (user can override the proposal). v7.5.0+: the
+                            # `/falcon work beads --model <model-id|auto|inherit>` flag
+                            # maps 1:1 onto this field, resolved BEFORE this file is
+                            # written (orchestrator-owns-model invariant; `auto`
+                            # resolves via model_defaults policy then bead-evaluated
+                            # fallback — see COMMANDS.md `### --model`). Consumed by the --bg
                             # launch wiring. ENFORCEABLE IN --bg MODE ONLY (same caveat
                             # as worker_thinking_mode below): in via-paste/paste modes
                             # no launch runs, so the field is recorded but advisory —
@@ -297,9 +302,38 @@ worker_model: "inherit"     # v7.4.0+. Model the worker session runs. Values: "i
                             # only when worker_dispatch_mode == "bg"; otherwise this is
                             # what was REQUESTED, not what runs — cross-check
                             # worker_dispatch_mode before reporting it as fact.
-                            # respawn-fresh successors reuse this value (per-respawn
-                            # override is fdev-334, future). Missing field = "inherit"
-                            # (pre-v7.4.0 dispatch files need no migration).
+                            # respawn-fresh successors reuse this value; as of v7.5.0
+                            # `respawn-fresh --model <id>` rewrites it BEFORE relaunch
+                            # (recorded value stays authoritative for later respawns).
+                            # Missing field = "inherit" (pre-v7.4.0 dispatch files need
+                            # no migration).
+
+worker_model_rationale: null   # v7.5.0+. One-line rationale recorded when worker_model was
+                               # resolved via `--model auto`: either "model_defaults: <matched
+                               # key>" (policy hit) or the bead-evaluated reasoning (policy
+                               # miss). null for inherit and explicit <model-id> dispatches.
+                               # Surfaced by /falcon status and the dispatch report so AFK
+                               # operators can audit why autopilot picked the model it did.
+                               # Missing field = null (pre-v7.5.0 files need no migration).
+
+escalations: []   # v7.5.0+. Intent-gate model escalations, oldest first. Appended by the
+                  # `escalate <dispatch-id>` verb (source: operator) or the --auto-ack
+                  # cron's escalation path (source: auto-ack-cron) BEFORE the respawn-fresh
+                  # relaunch. Each entry:
+                  #   - from_model: "<worker_model at escalation time>"
+                  #     to_model: "<resolved target model-id>"
+                  #     rationale: "<one line — why the intent signalled tier insufficiency>"
+                  #     source: "operator | auto-ack-cron"
+                  #     escalated_utc: "<ISO8601>"
+                  # len(escalations[]) is the consumed escalation count, compared against the
+                  # project's escalation_budget (falcon-autopilot.md § 8; default 1). Separate
+                  # budget from amendment_budget — neither decrements the other. Shown by
+                  # /falcon status + /falcon list-pending; surfaced in the dispatch report's
+                  # decisions_for_human[] (see Worker Return Contract). The respawn itself
+                  # also appends the normal worker_bg_prior_sessions[] forensic entry (reason
+                  # code manual-replace; this list carries the escalation semantics).
+                  # Missing field = [] (pre-v7.5.0 files need no migration). See PROTOCOL.md
+                  # `### Intent-gate model escalation (v7.5.0)`.
 
 worker_thinking_mode: "inherit"   # v7.4.0+. Extended-thinking budget for the worker.
                                   # Values: "inherit" (default — no env injected) |
@@ -586,6 +620,28 @@ If the field doesn't exist on a session JSON file (e.g., a session created befor
 
 ---
 
+## falcon-queue.yaml Schema (v7.6.0)
+
+Cross-session FIFO of pending dispatches deferred by `/falcon work beads ... --queue` on a Step 1c lock conflict. Lives at `.claude/tmp/falcon-queue.yaml`. Cross-session by design: it complements the cross-session lock registry above — a session-scoped queue would orphan entries when the enqueuing session ends, and the session that releases a lock is often not the session that enqueued.
+
+```yaml
+# .claude/tmp/falcon-queue.yaml — a flat YAML list, eldest entry first
+- queue_id: "4f9c2a"                  # fresh 6-hex id, distinct from dispatch ids
+  spec: "example-qrs.2,example-qrs.3" # original spec string, verbatim
+  flags: "--sequential --autopilot"   # invocation flags, verbatim, minus --queue itself
+  enqueued_utc: "2026-05-22T09:14:00Z"
+  enqueuing_session: "sess-7f"
+```
+
+Semantics:
+
+- **Absent file = empty queue.** Readers (the Step 4 / `/falcon release` queue scan, `/falcon list-pending`) treat a missing file as no pending entries; the enqueue path creates it on first use.
+- **Atomic read-modify-write.** Every mutation (enqueue, dequeue, manual `/falcon dequeue`) reads the whole file, modifies in memory, and writes back atomically (write temp + rename) — the same discipline as dispatch-file writes. Multiple steering sessions may race on a release; last-write-wins on a flat list is acceptable at this coordination scale, and the post-dequeue Step 1c re-check catches any double-dequeue scope conflict.
+- **Only spec + flags are trusted at dequeue.** Bead bodies, derived file scopes, and active locks are re-resolved fresh by the FULL pre-dispatch re-run (PROTOCOL.md Step 4 "Queue scan on release"). `enqueued_utc` orders the FIFO; `enqueuing_session` is an audit field, not a coordination mechanism.
+- **No auto-expiry.** Entries older than 24h are flagged STALE by `/falcon list-pending`; removal is manual (`/falcon dequeue <queue-id>`) or via successful dequeue.
+
+---
+
 ## init_prompt Content Template (default: thin / pointer-style)
 
 The dispatch file's `init_prompt` field embeds this content. As of v6.7.0, the template is intentionally thin (~60-90 lines per dispatch) and points the worker at the canonical skill files for lifecycle, return contract, and labeled-copy convention. Only per-dispatch content lives inline (branch, bead set, steering notes, optional pre-intent grep). The pointer-style avoids ~150 lines of duplication per dispatch and eliminates the drift risk where old dispatch files carry stale spec.
@@ -622,6 +678,8 @@ Branch: {{ branch_name }}
     git rev-parse --abbrev-ref HEAD
 
 The final command MUST return {{ branch_name }}. If `git checkout` fails with "did not match any file(s) known to git", the branch is not on origin yet — STOP and return a partial report with blocker: "branch {{ branch_name }} not found on origin after fetch."
+
+If `git checkout` fails with "already checked out at ..." — EXPECTED under `--bg` worktree isolation, where steering holds {{ branch_name }} in the main checkout — do NOT stop and do NOT invent a branch. Verify by ancestry instead: `git merge-base --is-ancestor origin/{{ branch_name }} HEAD` must succeed (your worktree branch is based at the dispatch branch tip; a FRESH worktree created from a different base may first be re-based with `git reset --hard origin/{{ branch_name }}`). Record the actual branch name you are on for your report. At push time, land commits directly on the branch ref: `git pull --rebase origin {{ branch_name }} && git push origin HEAD:{{ branch_name }}`. See PROTOCOL.md Worker Lifecycle Step 1 (worktree-mode branch verify) and Step 9 (worktree-mode push).
 
 Do NOT `git checkout -b`, do NOT switch branches, do NOT invent a branch name.
 
@@ -821,6 +879,14 @@ falcon_report:
       recommendation: "<which alternative + one-sentence why>"
       stakes: "low | high"
       action_taken: "proceeded with recommendation | stopped pending arbitration"
+    # Escalation audit entries (v7.5.0): when the dispatch file's escalations[] is
+    # non-empty, the reporting worker copies each escalation into this list so the
+    # /wrapup + retro surfaces see model-tier decisions alongside DARs. Shape:
+    #   - decision: "Escalated dispatch model <from_model> -> <to_model> at intent gate"
+    #     bead_context: "<dispatch-id> (pre-claim; applies to the whole bead set)"
+    #     recommendation: "<rationale from the escalations[] entry>"
+    #     stakes: "low"
+    #     action_taken: "escalated by <operator | auto-ack-cron> (<n>/<escalation_budget>)"
 
   enhancements:
     - kind: "doc_gap | workflow_friction | tooling_pain | standards_candidate"
@@ -994,7 +1060,7 @@ The stash is **append-only across N dispatches** on the same branch. `/wrapup` c
 
 ## falcon-autopilot.md Template
 
-**Moved in v7.2.0 to [`AUTOPILOT-RULES.md`](./AUTOPILOT-RULES.md#falcon-autopilotmd-template).** The 6-section rules-file template (`SAFE_TO_ACK_INTENT` predicate + `SAFE_TO_AMEND` whitelist + denylist + cognitive audit hints + advisor delegation policy + amendment budget defaults), the 3 profile definitions (`conservative`, `standard`, `aggressive`), and the adopter customization guidance all live in `AUTOPILOT-RULES.md` now.
+**Moved in v7.2.0 to [`AUTOPILOT-RULES.md`](./AUTOPILOT-RULES.md#falcon-autopilotmd-template).** The 8-section rules-file template (`SAFE_TO_ACK_INTENT` predicate + `SAFE_TO_AMEND` whitelist + denylist + cognitive audit hints + advisor delegation policy + amendment budget defaults + worker model defaults + intent-gate escalation ladder/budget), the 3 profile definitions (`conservative`, `standard`, `aggressive`), and the adopter customization guidance all live in `AUTOPILOT-RULES.md` now.
 
 ---
 

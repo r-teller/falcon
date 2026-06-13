@@ -1,6 +1,8 @@
 # PRD: Snake — Evolving Five-Phase Field Operation (Canonical)
 
-> Canonical explicit PRD. Authored from `examples/snake_prd_descriptive.md` via engineering review. Every "designer's call" the descriptive draft left open is resolved below with one sentence of rationale.
+> **Example PRD** — a sample input for the [bootstrap workflow](../BOOTSTRAP.md). In a Claude Code session in this repo, run `Follow @BOOTSTRAP.md with my PRD @examples/snake_prd.md` (or paste the prompt block from BOOTSTRAP.md) to see how it hydrates `.claude/{architecture,backend,...}.md` and seeds initial beads. A second, larger-scoped alternative to `asteroids_prd.md`.
+>
+> Canonical explicit PRD, authored from a descriptive draft via engineering review. Every "designer's call" the draft left open is resolved below with one sentence of rationale.
 >
 > Convention: top-level sections are `§1`, `§2`, …; sub-sections `§X.Y` bind exactly one rule or one fact. Numbers are stable identifiers — once shipped they do not move.
 
